@@ -40,15 +40,11 @@ struct StdioTransportTests {
   func testInvalidCommand() async throws {
     let transport = StdioTransport(command: "invalid_command_which_does_not_exist")
 
-    do {
-      try await transport.start()
-      Issue.record("Expected start to fail")
-    } catch {
-      #expect(await transport.state == .failed(error))
-    }
-
+    try await transport.start()
+    try await Task.sleep(for: .milliseconds(100))
 
     // Should remain disconnected
+    #expect(await transport.state == .disconnected)
     #expect(await !transport.isRunning)
   }
 

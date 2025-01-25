@@ -111,20 +111,27 @@ public struct StdioTransportOptions {
       let outPipe = Pipe()
       let errPipe = Pipe()
 
-      guard let commandURL = findExecutable(command) else {
-        let error = TransportError.invalidState("Command '\(command)' not found in PATH")
-        state = .failed(error)
-        throw error
-      }
-
       let newProcess = Process()
-      newProcess.executableURL = commandURL
-      newProcess.arguments = arguments
+      newProcess.executableURL = URL(fileURLWithPath: "/usr/bin/env")  // locate command in PATH
+      newProcess.arguments = [command] + arguments
 
       // Merge environment
       var processEnv = ProcessInfo.processInfo.environment
       environment?.forEach { processEnv[$0] = $1 }
 
+      // Ensure PATH includes typical node/npm locations
+      if var path = processEnv["PATH"] {
+        let additionalPaths = [
+          "/usr/local/bin",
+          "/usr/local/npm/bin",
+          "\(processEnv["HOME"] ?? "")/node_modules/.bin",
+          "\(processEnv["HOME"] ?? "")/.npm-global/bin",
+          "/opt/homebrew/bin",
+          "/usr/local/opt/node/bin",
+        ]
+        path = (additionalPaths + [path]).joined(separator: ":")
+        processEnv["PATH"] = path
+      }
       newProcess.environment = processEnv
 
       // Assign pipes
@@ -218,33 +225,6 @@ public struct StdioTransportOptions {
       } catch {
         logger.error("Error reading stderr: \(error)")
       }
-    }
-
-    nonisolated func findExecutable(_ command: String) -> URL? {
-      let process = Process()
-      let pipe = Pipe()
-
-      process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-      process.arguments = [command]
-      process.standardOutput = pipe
-      process.standardError = nil
-
-      do {
-        try process.run()
-        process.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(
-          in: .whitespacesAndNewlines),
-          !output.isEmpty
-        {
-          return URL(fileURLWithPath: output)
-        }
-      } catch {
-        logger.warning("Error locating \(command): \(error)")
-      }
-
-      return nil
     }
 
     private func readMessages(_ outPipe: Pipe) async {

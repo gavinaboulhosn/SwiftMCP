@@ -1,7 +1,7 @@
 import Foundation
 
 /// Standard JSON-RPC error codes with MCP extensions
-@frozen public enum JSONRPCErrorCode: Int, Codable, CustomStringConvertible {
+@frozen public enum JSONRPCErrorCode: Int, Codable {
     // MCP-specific codes
     case connectionClosed = -1
     case requestTimeout = -2
