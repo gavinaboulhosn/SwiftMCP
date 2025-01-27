@@ -17,7 +17,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   /// SSE endpoint URL
   private let sseURL: URL
   /// Optional post URL, typically discovered from an SSE `endpoint` event
-  private var postURL: URL?
+  private(set) var postURL: URL?
 
   /// Session used for SSE streaming and short-lived POST
   private let session: URLSession

@@ -55,7 +55,7 @@ struct SSEClientTransportTests {
         try await Task.sleep(for: .milliseconds(500))
 
         let sseTransport = SSEClientTransport(
-            url: sseServerEndpoint,
+          sseURL: sseServerEndpoint,
             configuration: .default
         )
 
@@ -70,7 +70,7 @@ struct SSEClientTransportTests {
 
         // We expect the SSE server to send an "endpoint" event with data: <postURL>.
         // SSEClientTransport should set `postEndpoint` from that event.
-        let postEndpoint = await sseTransport.postEndpoint
+      let postEndpoint = await sseTransport.postURL
         #expect(postEndpoint != nil)  // We should have discovered the endpoint
         #expect(await sseTransport.state == .connected)
 
@@ -93,7 +93,7 @@ struct SSEClientTransportTests {
         try await server.start()
         try await Task.sleep(for: .milliseconds(500))
 
-        let sseTransport = SSEClientTransport(url: sseServerEndpoint)
+        let sseTransport = SSEClientTransport(sseURL: sseServerEndpoint)
 
         let messagesTask = Task {
             for try await _ in await sseTransport.messages() { }
@@ -101,7 +101,7 @@ struct SSEClientTransportTests {
 
         // Wait for the "endpoint" event to set postEndpoint
         try await Task.sleep(for: .seconds(1))
-        let postURL = await sseTransport.postEndpoint
+      let postURL = await sseTransport.postURL
         #expect(postURL != nil)
 
         let testMessage = Data(#"{"hello":"world"}"#.utf8)
@@ -124,7 +124,7 @@ struct SSEClientTransportTests {
         try await server.start()
         try await Task.sleep(for: .milliseconds(300))
 
-        let sseTransport = SSEClientTransport(url: sseServerEndpoint)
+        let sseTransport = SSEClientTransport(sseURL: sseServerEndpoint)
         let messagesTask = Task {
             for try await _ in await sseTransport.messages() { }
         }
@@ -150,7 +150,7 @@ struct SSEClientTransportTests {
         try await server.start()
         try await Task.sleep(for: .milliseconds(300))
 
-        let sseTransport = SSEClientTransport(url: sseServerEndpoint)
+        let sseTransport = SSEClientTransport(sseURL: sseServerEndpoint)
 
         let firstSessionTask = Task {
             for try await _ in await sseTransport.messages() {}
@@ -182,13 +182,13 @@ struct SSEClientTransportTests {
         try await server.start()
         try await Task.sleep(for: .milliseconds(300))
 
-        let sseTransport = SSEClientTransport(url: sseServerEndpoint)
+        let sseTransport = SSEClientTransport(sseURL: sseServerEndpoint)
         let messagesTask = Task {
             for try await _ in await sseTransport.messages() {}
         }
 
         try await Task.sleep(for: .seconds(1))
-        let firstEndpoint = await sseTransport.postEndpoint
+        let firstEndpoint = await sseTransport.postURL
         #expect(firstEndpoint != nil, "First endpoint is set")
 
         do {
@@ -197,7 +197,7 @@ struct SSEClientTransportTests {
         } catch { }
 
         try await Task.sleep(for: .seconds(3))
-        let secondEndpoint = await sseTransport.postEndpoint
+        let secondEndpoint = await sseTransport.postURL
         #expect(secondEndpoint != nil, "Second endpoint is set or remains unchanged")
         #expect(firstEndpoint != secondEndpoint, "Endpoints are the same. they should have updated.")
 
@@ -213,13 +213,13 @@ struct SSEClientTransportTests {
         try await server.start()
         try await Task.sleep(for: .milliseconds(300))
 
-        let sseTransport = SSEClientTransport(url: sseServerEndpoint)
+        let sseTransport = SSEClientTransport(sseURL: sseServerEndpoint)
         let messagesTask = Task {
             for try await _ in await sseTransport.messages() {}
         }
 
         try await Task.sleep(for: .seconds(1))
-        let postURL = await sseTransport.postEndpoint
+        let postURL = await sseTransport.postURL
         #expect(postURL != nil)
 
         // trigger 5XX on post
@@ -248,7 +248,7 @@ struct SSEClientTransportTests {
         try await server.start()
         try await Task.sleep(for: .milliseconds(300))
 
-        let sseTransport = SSEClientTransport(url: sseServerEndpoint)
+        let sseTransport = SSEClientTransport(sseURL: sseServerEndpoint)
         let messagesTask = Task {
             for try await line in await sseTransport.messages() {
                 print("Server Log:", String(data: line, encoding: .utf8) ?? "<nil>")
@@ -256,7 +256,7 @@ struct SSEClientTransportTests {
         }
 
         try await Task.sleep(for: .seconds(1))
-        let postURL = await sseTransport.postEndpoint
+      let postURL = await sseTransport.postURL
         #expect(postURL != nil)
 
         let disconnectMsg = Data(#"client::disconnect"#.utf8)

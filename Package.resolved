@@ -1,12 +1,13 @@
 {
+  "originHash" : "c5bd288c350cee66ea4c15553bf75c99902caf86d726465f8aa315fcc35398bc",
   "pins" : [
     {
       "identity" : "swift-json-schema",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ajevans99/swift-json-schema.git",
+      "location" : "https://github.com/gavinaboulhosn/swift-json-schema.git",
       "state" : {
-        "revision" : "0245656588b326abe1f331e5868bd211f8c7655f",
-        "version" : "0.3.1"
+        "branch" : "main",
+        "revision" : "be5966f5284482c3b91ab041b0486ccb2acc64a2"
       }
     },
     {
@@ -19,5 +20,5 @@
       }
     }
   ],
-  "version" : 2
+  "version" : 3
 }

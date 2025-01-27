@@ -8,8 +8,26 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "ConnectionState")
 public enum ConnectionStateEvent {
   /// The connection's status changed
   case statusChanged(ConnectionStatus)
-
   case clientError(Error)
+}
+
+// Actor to manage continuations safely
+private actor ContinuationStore {
+  private var continuations: [UUID: AsyncStream<ConnectionStateEvent>.Continuation] = [:]
+
+  func store(_ id: UUID, _ continuation: AsyncStream<ConnectionStateEvent>.Continuation) {
+    continuations[id] = continuation
+  }
+
+  func remove(_ id: UUID) {
+    continuations.removeValue(forKey: id)
+  }
+
+  func yieldToAll(_ event: ConnectionStateEvent) {
+    for continuation in continuations.values {
+      continuation.yield(event)
+    }
+  }
 }
 
 /// A handle for interacting with a specific MCP server connection,
@@ -47,15 +65,19 @@ public final class ConnectionState: Identifiable {
 
   // MARK: - Async Streams for ConnectionState events
 
-  /// Stores each stream's continuation
-  private var eventContinuations: [UUID: AsyncStream<ConnectionStateEvent>.Continuation] = [:]
+  /// Stores the continuation manager
+  @ObservationIgnored
+  private let continuationStore = ContinuationStore()
 
   /// The current `ConnectionStatus`.
   /// Observers may subscribe to `events()` or observe `status` changes if using SwiftUI.
   public private(set) var status: ConnectionStatus = .connected {
     didSet {
       if oldValue != status {
-        yieldEvent(.statusChanged(status))
+        Task { [weak self] in
+          guard let self else { return }
+          await self.yieldEvent(.statusChanged(self.status))
+        }
       }
     }
   }
@@ -64,7 +86,6 @@ public final class ConnectionState: Identifiable {
   public var isConnected: Bool { status != .disconnected }
 
   /// Create a new ConnectionState wrapper.
-
   /// - Parameters:
   /// - id: A unique identifier for referencing this connection
   /// - client: The `MCPClient` that powers this connection
@@ -82,25 +103,26 @@ public final class ConnectionState: Identifiable {
     self.capabilities = capabilities
 
     // Monitor the client's events to update local status
-    statusMonitorTask = Task {
+    statusMonitorTask = Task { [weak self] in
+      guard let self = self else { return }
       let evtStream = await client.events
       for await event in evtStream {
         switch event {
         case .connectionChanged(let state):
           switch state {
           case .running:
-            status = .connected
+            self.status = .connected
           case .failed:
-            status = .failed
+            self.status = .failed
           case .disconnected:
-            status = .disconnected
+            self.status = .disconnected
           case .connecting, .initializing:
-            status = .connecting
+            self.status = .connecting
           }
         case .message(_):
           break
         case .error(let err):
-          yieldEvent(.clientError(err))
+          await self.yieldEvent(.clientError(err))
           logger.error("MCPClient error: \(err)")
         }
       }
@@ -123,21 +145,21 @@ public final class ConnectionState: Identifiable {
   private func storeConnectionContinuation(
     _ id: UUID,
     _ cont: AsyncStream<ConnectionStateEvent>.Continuation
-  ) {
-    eventContinuations[id] = cont
+  ) async {
+    await continuationStore.store(id, cont)
     cont.onTermination = { [weak self] _ in
-      self?.removeConnectionContinuation(id)
+      Task { [weak self] in
+        await self?.removeConnectionContinuation(id)
+      }
     }
   }
 
-  private func removeConnectionContinuation(_ id: UUID) {
-    eventContinuations.removeValue(forKey: id)
+  private func removeConnectionContinuation(_ id: UUID) async {
+    await continuationStore.remove(id)
   }
 
-  private func yieldEvent(_ event: ConnectionStateEvent) {
-    for cont in eventContinuations.values {
-      cont.yield(event)
-    }
+  private func yieldEvent(_ event: ConnectionStateEvent) async {
+    await continuationStore.yieldToAll(event)
   }
 
   // MARK: - High-Level Operations
