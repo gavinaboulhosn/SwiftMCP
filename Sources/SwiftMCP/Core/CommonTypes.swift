@@ -1,7 +1,7 @@
 import Foundation
 
 /// A request ID type that can be string or int.
-public enum RequestID: Codable, Hashable, Sendable {
+public enum RequestID: Codable, Hashable, Sendable, CustomStringConvertible {
     case string(String)
     case int(Int)
 
@@ -25,6 +25,15 @@ public enum RequestID: Codable, Hashable, Sendable {
         case .int(let intValue): try container.encode(intValue)
         }
     }
+  
+  public var description: String {
+    switch self {
+    case .string(let string):
+      string
+    case .int(let int):
+      "\(int)"
+    }
+  }
 }
 
 /// AnyCodable helper for dynamic JSON fields.

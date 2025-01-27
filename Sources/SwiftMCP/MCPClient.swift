@@ -1,15 +1,41 @@
 import Foundation
+import OSLog
 
+private let logger = Logger(subsystem: "SwiftMCP", category: "MCPClient")
+
+/// Events emitted by `MCPClient`, bridging some internal states and messages.
 public enum MCPClientEvent {
+  /// Connection state changed (connecting, running, disconnected, etc.)
   case connectionChanged(MCPEndpointState<InitializeResult>)
-  // TODO: Implement below events
+  /// Incoming MCP message (JSON-RPC request/notification from server)
   case message(any MCPMessage)
+  /// Indicates an error encountered in the MCP client
   case error(Error)
 }
 
-/// A client implementation of the Model Context Protocol
+/// A client (endpoint) for the Model Context Protocol (MCP).
 public actor MCPClient: MCPEndpointProtocol {
-  // MARK: - Properties
+
+  public typealias SessionInfo = InitializeResult
+
+  /// Configuration for the client, specifying `Implementation` details
+  /// and `ClientCapabilities`.
+  public struct Configuration {
+    public let clientInfo: Implementation
+    public let capabilities: ClientCapabilities
+
+    public init(clientInfo: Implementation, capabilities: ClientCapabilities) {
+      self.clientInfo = clientInfo
+      self.capabilities = capabilities
+    }
+
+    public static let `default` = Configuration(
+      clientInfo: .defaultClient,
+      capabilities: .init()
+    )
+  }
+
+  // MARK: - State
 
   public private(set) var state: MCPEndpointState<SessionInfo> = .disconnected {
     didSet {
@@ -17,15 +43,23 @@ public actor MCPClient: MCPEndpointProtocol {
     }
   }
 
+  /// Stream of notifications from this client
   public let notifications: AsyncStream<any MCPNotification>
   private let notificationsContinuation: AsyncStream<any MCPNotification>.Continuation
+
+  /// Stream of client events for external observation
   public let events: AsyncStream<MCPClientEvent>
   private let eventsContinuation: AsyncStream<MCPClientEvent>.Continuation
 
   private var pendingRequests: [RequestID: any PendingRequestProtocol] = [:]
   private var requestHandlers: [String: ServerRequestHandler] = [:]
 
+  /// Manages background reading from transport
   private var messageTask: Task<Void, Error>?
+  /// Periodic monitoring (health check) task
+  private var monitoringTask: Task<Void, Never>?
+  /// Count of reconnection attempts
+  private var reconnectAttempts = 0
 
   private var transport: (any MCPTransport)?
   private let clientInfo: Implementation
@@ -33,38 +67,64 @@ public actor MCPClient: MCPEndpointProtocol {
 
   private var currentRoots: [Root] = []
 
+  /// Manages progress notifications for requests
   private let progressManager = ProgressManager()
 
+  /// Returns `true` if the client is in a `.running` state.
   public var isConnected: Bool {
-    guard case .running = state else {
-      return false
-    }
+    guard case .running = state else { return false }
     return true
   }
 
   // MARK: - Initialization
-  init(configuration: Configuration) {
-    self.init(clientInfo: configuration.clientInfo, capabilities: configuration.capabilities)
-  }
 
+  /// Creates a client with a given configuration.
   public init(
     clientInfo: Implementation,
     capabilities: ClientCapabilities = .init()
   ) {
-    // Setup notifications stream
-    var continuation: AsyncStream<any MCPNotification>.Continuation!
-    self.notifications = AsyncStream { continuation = $0 }
-    self.notificationsContinuation = continuation
+    // Prepare notifications stream
+    var notifsCont: AsyncStream<any MCPNotification>.Continuation!
+    self.notifications = AsyncStream<any MCPNotification> { notifsCont = $0 }
+    self.notificationsContinuation = notifsCont
+
+    // Prepare events stream
+    var evCont: AsyncStream<MCPClientEvent>.Continuation!
+    self.events = AsyncStream<MCPClientEvent> { evCont = $0 }
+    self.eventsContinuation = evCont
+
     self.clientCapabilities = capabilities
     self.clientInfo = clientInfo
-    var eventsContinuation: AsyncStream<MCPClientEvent>.Continuation!
-    self.events = AsyncStream { eventsContinuation = $0 }
-    self.eventsContinuation = eventsContinuation
+  }
+
+  /// Convenience init that uses `Configuration`
+  public init(configuration: Configuration) {
+    self.init(
+      clientInfo: configuration.clientInfo,
+      capabilities: configuration.capabilities
+    )
+  }
+
+  /// Registers a handler for a specific MCPRequest type
+  /// so that the client can respond to inbound requests from a server.
+  public func registerHandler<R: MCPRequest>(
+    for request: R.Type,
+    handler: @escaping (R) async throws -> R.Response
+  ) {
+    let handler: ServerRequestHandler = { anyReq in
+      guard let typed = anyReq as? R else {
+        throw MCPError.invalidRequest("Unexpected request type")
+      }
+      return try await handler(typed)
+    }
+    requestHandlers[R.method] = handler
   }
 
   // MARK: - Connection Management
 
-  public func start(_ transport: any MCPTransport) async throws {
+  /// Start the client using the given `transport`.
+  /// - Throws: If starting or initialization fails.
+  public func start(_ transport: MCPTransport) async throws {
     if case .running = state {
       await stop()
     }
@@ -74,175 +134,213 @@ public actor MCPClient: MCPEndpointProtocol {
 
     try await transport.start()
 
-    // Start message processing
+    // Begin reading from transport
+    let messageStream = await transport.messages()
     messageTask = Task {
       do {
-        guard let transport = self.transport else {
-          throw MCPError.internalError("Transport not available")
-        }
-        let messageStream = await transport.messages()
         for try await data in messageStream {
-          if Task.isCancelled { break }
-          try await processIncomingMessage(data)
+          try Task.checkCancellation()
+          try await self.processIncomingMessage(data)
         }
       } catch {
         await handleError(error)
       }
     }
 
-    // Perform initialization
+    await startMonitoring()
+
     state = .initializing
+    registerDefaultRequestHandlers()
+
     do {
       let capabilities = try await performInitialization()
       state = .running(capabilities)
     } catch {
-      state = .failed(MCPError.internalError("Failed to initialize server connection"))
+      let errMsg = "Failed to initialize server connection: \(error)"
+      state = .failed(MCPError.internalError(errMsg))
+      logger.error("\(errMsg)")
+      throw error
     }
   }
 
+  /// Stop the client, cancelling tasks and clearing state.
   public func stop() async {
-    // Cancel message processing
     messageTask?.cancel()
     messageTask = nil
 
-    // Cancel pending requests
-    let error = MCPError.internalError("Client stopped")
+    monitoringTask?.cancel()
+    monitoringTask = nil
+    reconnectAttempts = 0
+
+    let stopErr = MCPError.internalError("Client stopped")
     for request in pendingRequests.values {
-      request.cancel(with: error)
+      request.cancel(with: stopErr)
     }
     pendingRequests.removeAll()
 
     await transport?.stop()
-    transport = nil
     state = .disconnected
+    logger.debug("MCPClient stopped.")
   }
 
+  /// Attempt to reconnect using the same transport.
   public func reconnect() async throws {
-    guard case .disconnected = state else {
-      throw MCPError.internalError("Can only reconnect when disconnected")
+    if isConnected {
+      await stop()
     }
-
     guard let transport = self.transport else {
-      throw MCPError.internalError("Transport not available")
+      throw MCPError.internalError("No transport available to reconnect.")
     }
 
     state = .connecting
     await transport.stop()
+    reconnectAttempts = 0
+
     try await transport.start()
     do {
       let capabilities = try await performInitialization()
       state = .running(capabilities)
     } catch {
-      state = .failed(MCPError.internalError("Failed to initialize server connection"))
+      let msg = "Failed to initialize after reconnect: \(error)"
+      state = .failed(MCPError.internalError(msg))
+      logger.error("\(msg)")
+    }
+  }
+
+  /// Set up a periodic health check if the transport config so indicates.
+  private func startMonitoring() async {
+    guard let configuration = await transport?.configuration,
+      configuration.healthCheckEnabled
+    else { return }
+
+    let interval = configuration.healthCheckInterval
+    let maxReconnect = configuration.maxReconnectAttempts
+
+    monitoringTask?.cancel()
+    monitoringTask = Task {
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: .seconds(interval))
+          try Task.checkCancellation()
+          await performHealthCheck(maxReconnect: maxReconnect)
+        } catch {
+          return
+        }
+      }
+    }
+  }
+
+  /// Perform a single health check by calling `ping()`.
+  private func performHealthCheck(maxReconnect: Int) async {
+    do {
+      try await ping()
+      reconnectAttempts = 0
+    } catch {
+      reconnectAttempts += 1
+      logger.warning("MCPClient ping failed: \(error). Reconnect attempt \(self.reconnectAttempts)")
+      if reconnectAttempts <= maxReconnect {
+        do {
+          try await reconnect()
+        } catch {
+          logger.error("Reconnection attempt failed: \(error)")
+        }
+      } else {
+        logger.error("Max reconnect attempts reached. Stopping MCPClient.")
+        await stop()
+      }
     }
   }
 
   // MARK: - Request Handling
 
+  /// Send an MCP request of type `R`.
   public func send<R: MCPRequest>(_ request: R) async throws -> R.Response {
     try await send(request, progressHandler: nil)
   }
 
+  /// Send an MCP request with an optional progress handler.
   public func send<R: MCPRequest>(
     _ request: R,
     progressHandler: ProgressHandler.UpdateHandler? = nil
   ) async throws -> R.Response {
-    guard case .running(let session) = state else {
+    guard case .running(let sess) = state else {
       throw MCPError.internalError("Client must be running to send requests")
     }
 
-    // Validate capabilities for this request type
-    try validateCapabilities(session.capabilities, for: request)
-
-    return try await sendRequest(request, progressHandler: progressHandler)
+    try validateCapabilities(sess.capabilities, for: request)
+    let response = try await sendRequest(request, progressHandler: progressHandler)
+    logger.debug(
+      "MCPClient sent request \(R.method) -> received response type \(String(describing: R.Response.self))"
+    )
+    return response
   }
 
-  // MARK: - Notification Handling
-
+  /// Emit an MCP notification (no response).
   public func emit<N: MCPNotification>(_ notification: N) async throws {
     guard case .running = state else {
       throw MCPError.internalError("Client must be running to send notifications")
     }
-
-    let message = JSONRPCMessage.notification(notification)
-    let data = try JSONEncoder().encode(message)
+    let msg = JSONRPCMessage.notification(notification)
+    let data = try JSONEncoder().encode(msg)
     try await transport?.send(data)
   }
 
-  // MARK: - Request Handlers
-  public func registerHandler<R: MCPRequest>(
-    for request: R.Type,
-    handler: @escaping (R) async throws -> R.Response
-  ) {
-    let handler: ServerRequestHandler = { request in
-      guard let typedRequest = request as? R else {
-        throw MCPError.invalidRequest("Unexpected request type")
-      }
-      return try await handler(typedRequest)
-    }
-
-    requestHandlers[request.method] = handler
-  }
-
+  /// Register a root structure for demonstration, if needed.
   public func updateRoots(_ roots: [Root]?) async throws {
     guard let roots = roots else {
       currentRoots = []
       return
     }
-
     try await notifyRootsChanged(roots)
   }
 
-  // MARK: - Private Methods
-
-  /// Send a request without state validation - used only for initialization
+  // MARK: - Private
   private func sendRequest<R: MCPRequest>(
     _ request: R,
     progressHandler: ProgressHandler.UpdateHandler? = nil
   ) async throws -> R.Response {
-    guard let transport = transport else {
+    guard let transport else {
       throw MCPError.connectionClosed()
     }
 
     let requestId = RequestID.string(UUID().uuidString)
-    var request = request
-    if let progressHandler {
+    var newReq = request
+
+    if let progress = progressHandler {
       let meta = RequestMeta(progressToken: requestId)
-      request.params._meta = meta
-      let handler = ProgressHandler(token: requestId, handler: progressHandler)
+      newReq.params._meta = meta
+      let handler = ProgressHandler(token: requestId, handler: progress)
       await progressManager.register(handler, for: requestId)
     }
 
-    let message = JSONRPCMessage.request(id: requestId, request: request)
+    let msg = JSONRPCMessage.request(id: requestId, request: newReq)
 
     return try await withCheckedThrowingContinuation { continuation in
-      // Create timeout
       let timeoutTask = Task {
         try? await Task.sleep(for: .seconds(transport.configuration.sendTimeout))
         if pendingRequests[requestId] != nil {
           pendingRequests.removeValue(forKey: requestId)
           await continuation.resume(
             throwing: MCPError.timeout(
-              R.method, duration: transport.configuration.sendTimeout
+              R.method,
+              duration: transport.configuration.sendTimeout
             )
           )
         }
       }
 
-      // Track request
       pendingRequests[requestId] = PendingRequest<R.Response>(
         continuation: continuation,
         timeoutTask: timeoutTask
       )
 
-      // Send request
       Task {
         do {
-          let data = try JSONEncoder().encode(message)
-          try await transport.send(data)
+          let encoded = try JSONEncoder().encode(msg)
+          try await transport.send(encoded)
         } catch {
-          if let pending = pendingRequests.removeValue(forKey: requestId) {
-            pending.cancel(with: error)
+          if let pen = pendingRequests.removeValue(forKey: requestId) {
+            pen.cancel(with: error)
           }
         }
       }
@@ -250,77 +348,73 @@ public actor MCPClient: MCPEndpointProtocol {
   }
 
   private func processIncomingMessage(_ data: Data) async throws {
-    guard
-      let message = try? JSONDecoder().decode(
-        JSONRPCMessage.self,
-        from: data
-      )
-    else {
+    guard let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: data) else {
+      logger.error("Failed to decode incoming data as JSONRPCMessage.")
       return
     }
+
     switch message {
-    case .notification(let notification):
-      switch notification {
+    case .notification(let anyNotif):
+      switch anyNotif {
       case let cancelled as CancelledNotification:
         try await handleCancelledRequest(cancelled)
-        return
       case let progress as ProgressNotification:
         await progressManager.handle(progress)
-        return
       default:
-        notificationsContinuation.yield(notification)
-        return
+        notificationsContinuation.yield(anyNotif)
       }
-    case .response(let id, let result):
-      await handleResponse(id, result)
-      return
-    case .error(let id, let error):
-      if let handler = pendingRequests[id] {
-        handler.cancel(with: error)
 
+    case .response(let id, let anyResult):
+      await handleResponse(id, anyResult)
+
+    case .error(let id, let rpcError):
+      if let pending = pendingRequests[id] {
+        pending.cancel(with: rpcError)
         pendingRequests.removeValue(forKey: id)
       }
       await progressManager.unregister(for: id)
-      return
-    case .request(let id, let request):
-      try await handleRequest(id, request)
+
+    case .request(let id, let inboundReq):
+      try await handleRequest(id, inboundReq)
     }
   }
 
   private func handleResponse(_ id: RequestID, _ resultCodable: AnyCodable) async {
-    if let handler = pendingRequests[id] {
+    if let pending = pendingRequests[id] {
       do {
-        let data = try JSONEncoder().encode(resultCodable)
-        let response = try JSONDecoder().decode(handler.responseType, from: data)
-        try pendingRequests[id]?.complete(with: response)
+        let encoded = try JSONEncoder().encode(resultCodable)
+        let typedResponse = try JSONDecoder().decode(pending.responseType, from: encoded)
+        try pending.complete(with: typedResponse)
       } catch {
-        pendingRequests[id]?.cancel(with: error)
+        pending.cancel(with: error)
       }
       pendingRequests.removeValue(forKey: id)
+    } else {
+      logger.warning("No pending request found for id \(id)")
     }
     await progressManager.unregister(for: id)
   }
 
-  private func handleRequest(_ id: RequestID, _ request: any MCPRequest) async throws {
-    let method = type(of: request).method
+  private func handleRequest(_ id: RequestID, _ inbound: any MCPRequest) async throws {
+    let method = type(of: inbound).method
     guard let handler = requestHandlers[method] else {
       let error = MCPError.methodNotFound(method)
-      let message = JSONRPCMessage.error(id: id, error: error)
-      let data = try JSONEncoder().encode(message)
-      try await transport?.send(data)
+      let msg = JSONRPCMessage.error(id: id, error: error)
+      let decoded = try JSONEncoder().encode(msg)
+      try await transport?.send(decoded)
       return
     }
 
     do {
-      let response = try await handler(request)
-      let message = JSONRPCMessage.response(id, response: response)
-      let data = try JSONEncoder().encode(message)
-      try await transport?.send(data)
+      let resp = try await handler(inbound)
+      let outMsg = JSONRPCMessage.response(id, response: resp)
+      let outData = try JSONEncoder().encode(outMsg)
+      try await transport?.send(outData)
     } catch {
-      let mcpError = error as? MCPError ?? MCPError.internalError(error.localizedDescription)
-      let message = JSONRPCMessage.error(id: id, error: mcpError)
-      let data = try JSONEncoder().encode(message)
-      try await transport?.send(data)
+      let mcpe = error as? MCPError ?? MCPError.internalError(error.localizedDescription)
+      let outMsg = JSONRPCMessage.error(id: id, error: mcpe)
+      let outData = try JSONEncoder().encode(outMsg)
+      try await transport?.send(outData)
     }
   }
 
@@ -331,44 +425,39 @@ public actor MCPClient: MCPEndpointProtocol {
   }
 
   private func handleCancelledRequest(_ notification: CancelledNotification) async throws {
-    guard let handler = pendingRequests[notification.params.requestId] else {
-      return
-    }
-
-    handler.cancel(with: MCPError.internalError("Request was cancelled"))
+    guard let pending = pendingRequests[notification.params.requestId] else { return }
+    pending.cancel(with: MCPError.internalError("Request was cancelled via CancelledNotification"))
     pendingRequests.removeValue(forKey: notification.params.requestId)
   }
 
   private func performInitialization() async throws -> SessionInfo {
     guard let transport else {
-      throw MCPError.internalError("Transport not available")
+      throw MCPError.internalError("No transport available for initialization.")
     }
 
-    let request = InitializeRequest(
+    let initReq = InitializeRequest(
       params: .init(
         capabilities: clientCapabilities,
         clientInfo: clientInfo,
         protocolVersion: MCPVersion.currentVersion
-      ))
-
-    // Initialize request needs to be sent without validation
-    let response = try await sendRequest(request)
+      )
+    )
+    let initResp = try await sendRequest(initReq)
 
     // Validate protocol version
-    guard MCPVersion.isSupported(response.protocolVersion) else {
-      throw MCPError.invalidRequest(
-        "Server version \(response.protocolVersion) not supported")
+    guard MCPVersion.isSupported(initResp.protocolVersion) else {
+      throw MCPError.invalidRequest("Server MCP version \(initResp.protocolVersion) not supported.")
     }
 
-    // Send initialized notification
     let notification = InitializedNotification()
-    let message = JSONRPCMessage.notification(notification)
-    let data = try JSONEncoder().encode(message)
-    try await transport.send(data)
+    let msg = JSONRPCMessage.notification(notification)
+    let raw = try JSONEncoder().encode(msg)
+    try await transport.send(raw)
 
-    return response
+    return initResp
   }
 
+  /// Validate that the server capabilities for the current session support the given request.
   private func validateCapabilities(
     _ capabilities: ServerCapabilities,
     for request: any MCPRequest
@@ -376,49 +465,54 @@ public actor MCPClient: MCPEndpointProtocol {
     switch request {
     case is ListPromptsRequest:
       guard capabilities.prompts != nil else {
-        throw MCPError.invalidRequest("Server does not support prompts")
+        throw MCPError.invalidRequest("Server does not support prompts.")
       }
     case is ListResourcesRequest, is ReadResourceRequest:
       guard capabilities.resources != nil else {
-        throw MCPError.invalidRequest("Server does not support resources")
+        throw MCPError.invalidRequest("Server does not support resources.")
       }
     case is ListToolsRequest, is CallToolRequest:
       guard capabilities.tools != nil else {
-        throw MCPError.invalidRequest("Server does not support tools")
+        throw MCPError.invalidRequest("Server does not support tools.")
       }
     case is SetLevelRequest:
       guard capabilities.logging != nil else {
-        throw MCPError.invalidRequest("Server does not support logging")
+        throw MCPError.invalidRequest("Server does not support logging.")
       }
     case is InitializeRequest:
       // Always allowed
       break
     default:
-      // For unknown request types, allow them through
-      // This enables future protocol extensions
+      // Allow unknown request types for future extension
       break
     }
   }
 
+  /// Called when we encounter an error in the message Task or SSE loop,
+  /// attempts to reconnect (if configured).
   private func handleError(_ error: Error) async {
+    logger.error("MCPClient encountered error: \(error). Transitioning to failed state.")
     state = .failed(error)
+    do {
+      try Task.checkCancellation()
+      // Attempt reconnect
+      try await reconnect()
+    } catch {
+      logger.error("Failed to reconnect after error: \(error). Client is stopping.")
+    }
 
-    // Cancel all pending requests
-    for handler in pendingRequests.values {
-      handler.cancel(with: error)
+    // Cancel pending requests
+    for pending in pendingRequests.values {
+      pending.cancel(with: error)
     }
     pendingRequests.removeAll()
   }
 
-  func notifyRootsChanged(_ roots: [Root]) async throws {
-    // Only notify if roots actually changed
-    guard roots != currentRoots else { return }
-    currentRoots = roots
-
-    // Automatically handle roots capability and notification
+  private func notifyRootsChanged(_ newRoots: [Root]) async throws {
+    guard newRoots != currentRoots else { return }
+    currentRoots = newRoots
     try await emit(RootsListChangedNotification())
   }
-
   // Simplified handler for list roots request
   private func handleListRoots(_ request: ListRootsRequest) async throws -> ListRootsResult {
     return ListRootsResult(roots: currentRoots)
@@ -448,7 +542,7 @@ extension MCPClient {
     cursor: String? = nil,
     progress: ProgressHandler.UpdateHandler? = nil
   ) async throws -> ListToolsResult {
-    try await send(ListToolsRequest(cursor: cursor), progressHandler: progress)
+    return try await send(ListToolsRequest(cursor: cursor), progressHandler: progress)
   }
 
   public func callTool(
@@ -514,23 +608,6 @@ extension MCPClient {
 
 extension MCPClient {
   public typealias ServerRequestHandler = (any MCPRequest) async throws -> any MCPResponse
-
-  public typealias SessionInfo = InitializeResult
-
-  public struct Configuration {
-    public let clientInfo: Implementation
-    public let capabilities: ClientCapabilities
-
-    public init(clientInfo: Implementation, capabilities: ClientCapabilities) {
-      self.clientInfo = clientInfo
-      self.capabilities = capabilities
-    }
-
-    public static let `default` = Configuration(
-      clientInfo: .defaultClient,
-      capabilities: .init()
-    )
-  }
 
   private protocol PendingRequestProtocol {
     func cancel(with error: Error)

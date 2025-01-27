@@ -1,201 +1,118 @@
 import Foundation
 
-/// Configuration for transport connection behavior
+/// Defines overall transport behavior and retry policies.
 public struct TransportConfiguration {
-    /// Maximum time to wait for connection in seconds
-    public let connectTimeout: TimeInterval
+  /// Maximum time to wait for connection in seconds
+  public var connectTimeout: TimeInterval
+  /// Maximum time to wait for sending data in seconds
+  public var sendTimeout: TimeInterval
+  /// Maximum allowed message size in bytes
+  public var maxMessageSize: Int
+  /// Retry policy for short-lived operations
+  public var retryPolicy: TransportRetryPolicy
 
-    /// Maximum time to wait for a message send in seconds
-    public let sendTimeout: TimeInterval
+  // MARK: - Health Checks & Reconnection
 
-    /// Maximum message size in bytes
-    public let maxMessageSize: Int
+  /// Enables client-side health checks if `true`
+  public var healthCheckEnabled: Bool
+  /// Interval (seconds) between health checks
+  public var healthCheckInterval: TimeInterval
+  /// Maximum reconnection attempts when health checks fail
+  public var maxReconnectAttempts: Int
 
-    /// Retry policy for failed operations
-    public let retryPolicy: TransportRetryPolicy
+  /// Initializes a transport configuration.
 
-    public init(
-        connectTimeout: TimeInterval = 30.0,
-        sendTimeout: TimeInterval = 30.0,
-        maxMessageSize: Int = 1024 * 1024 * 4,  // 4MB default
-        retryPolicy: TransportRetryPolicy = .default
-    ) {
-        self.connectTimeout = connectTimeout
-        self.sendTimeout = sendTimeout
-        self.maxMessageSize = maxMessageSize
-        self.retryPolicy = retryPolicy
-    }
+  /// - Parameters:
+  /// - connectTimeout: Max time allowed to establish a connection
+  /// - sendTimeout: Max time allowed to send a message
+  /// - maxMessageSize: Limit in bytes for message size
+  /// - retryPolicy: Policy for short-lived operation retries
+  /// - healthCheckEnabled: Whether or not to run periodic health checks
+  /// - healthCheckInterval: Interval in seconds between health checks
+  /// - maxReconnectAttempts: Max attempts to reconnect on health check failures
+  public init(
+    connectTimeout: TimeInterval = 120.0,
+    sendTimeout: TimeInterval = 1200.0,
+    maxMessageSize: Int = 4_194_304,  // 4 MB
+    retryPolicy: TransportRetryPolicy = .default,
+    healthCheckEnabled: Bool = false,
+    healthCheckInterval: TimeInterval = 30.0,
+    maxReconnectAttempts: Int = 3
+  ) {
+    self.connectTimeout = connectTimeout
+    self.sendTimeout = sendTimeout
+    self.maxMessageSize = maxMessageSize
+    self.retryPolicy = retryPolicy
+    self.healthCheckEnabled = healthCheckEnabled
+    self.healthCheckInterval = healthCheckInterval
+    self.maxReconnectAttempts = maxReconnectAttempts
+  }
 
-    public static let `default` = TransportConfiguration()
+  public static let `default` = TransportConfiguration()
 }
 
-/// Policy for retrying failed operations
+/// Policy for retrying short-lived operations (e.g. POST calls).
 public struct TransportRetryPolicy {
-    /// Maximum number of retry attempts
-    public let maxAttempts: Int
+  /// Maximum number of retry attempts
+  public let maxAttempts: Int
+  /// Base delay between attempts
+  public var baseDelay: TimeInterval
+  /// Maximum possible delay
+  public var maxDelay: TimeInterval
+  /// Jitter factor (0.0 - 1.0)
+  public var jitter: Double
+  /// Type of backoff policy
+  public var backoffPolicy: BackoffPolicy
 
-    /// Base delay between retries in seconds
-    public let baseDelay: TimeInterval
+  /// Types of backoff expansions for subsequent retries.
+  public enum BackoffPolicy {
+    case constant
+    case exponential
+    case linear
+    case custom((Int) -> TimeInterval)
 
-    /// Maximum delay between retries in seconds
-    public let maxDelay: TimeInterval
-
-    /// Jitter factor to add randomness to delays (0.0-1.0)
-    public let jitter: Double
-
-    /// Backoff policy for increasing delays between retries
-    public let backoffPolicy: BackoffPolicy
-
-    public enum BackoffPolicy {
-        /// Fixed delay between attempts
-        case constant
-
-        /// Exponential backoff with optional jitter
-        case exponential
-
-        /// Linear backoff with optional jitter
-        case linear
-
-        /// Custom backoff function
-        case custom((Int) -> TimeInterval)
-
-        func delay(attempt: Int, baseDelay: TimeInterval, jitter: Double = 0) -> TimeInterval {
-            let rawDelay: TimeInterval
-
-            switch self {
-            case .constant:
-                rawDelay = baseDelay
-
-            case .exponential:
-                rawDelay = baseDelay * pow(2.0, Double(attempt - 1))
-
-            case .linear:
-                rawDelay = baseDelay * Double(attempt)
-
-            case .custom(let calculator):
-                rawDelay = calculator(attempt)
-            }
-
-            // Add jitter if specified
-            if jitter > 0 {
-                let jitterRange = rawDelay * jitter
-                let randomJitter = Double.random(in: -jitterRange...jitterRange)
-                return max(0, rawDelay + randomJitter)
-            }
-            return rawDelay
-        }
+    func delay(attempt: Int, baseDelay: TimeInterval, jitter: Double) -> TimeInterval {
+      let rawDelay: TimeInterval
+      switch self {
+      case .constant:
+        rawDelay = baseDelay
+      case .exponential:
+        rawDelay = baseDelay * pow(2.0, Double(attempt - 1))
+      case .linear:
+        rawDelay = baseDelay * Double(attempt)
+      case .custom(let calculator):
+        rawDelay = calculator(attempt)
+      }
+      // Add optional jitter
+      if jitter > 0 {
+        let jitterRange = rawDelay * jitter
+        let randomJitter = Double.random(in: -jitterRange...jitterRange)
+        return max(0, rawDelay + randomJitter)
+      }
+      return rawDelay
     }
+  }
 
-    public init(
-        maxAttempts: Int = 3,
-        baseDelay: TimeInterval = 1.0,
-        maxDelay: TimeInterval = 30.0,
-        jitter: Double = 0.1,
-        backoffPolicy: BackoffPolicy = .exponential
-    ) {
-        self.maxAttempts = maxAttempts
-        self.baseDelay = baseDelay
-        self.maxDelay = maxDelay
-        self.jitter = jitter
-        self.backoffPolicy = backoffPolicy
-    }
+  /// Creates a retry policy.
+  public init(
+    maxAttempts: Int = 3,
+    baseDelay: TimeInterval = 1.0,
+    maxDelay: TimeInterval = 30.0,
+    jitter: Double = 0.1,
+    backoffPolicy: BackoffPolicy = .exponential
+  ) {
+    self.maxAttempts = maxAttempts
+    self.baseDelay = baseDelay
+    self.maxDelay = maxDelay
+    self.jitter = jitter
+    self.backoffPolicy = backoffPolicy
+  }
 
-    public static let `default` = TransportRetryPolicy()
+  public static let `default` = TransportRetryPolicy()
 
-    /// Calculate delay for a given attempt
-    public func delay(forAttempt attempt: Int) -> TimeInterval {
-        let raw = backoffPolicy.delay(attempt: attempt, baseDelay: baseDelay, jitter: jitter)
-        return min(raw, maxDelay)
-    }
-}
-
-/// A transport connection state
-public enum TransportState {
-
-    /// Transport is disconnected
-    case disconnected
-
-    /// Transport is connecting
-    case connecting
-
-    /// Transport is connected and ready
-    case connected
-
-    /// Transport has permanently failed
-    case failed(Error)
-}
-
-extension TransportState: CustomStringConvertible, CustomDebugStringConvertible {
-    public var description: String {
-        switch self {
-        case .disconnected: return "disconnected"
-        case .connecting: return "connecting"
-        case .connected: return "connected"
-        case .failed(let error): return "failed: \(error)"
-        }
-    }
-
-    public var debugDescription: String {
-        switch self {
-        case .disconnected: return "Transport is disconnected"
-        case .connecting: return "Transport is connecting"
-        case .connected: return "Transport is connected"
-        case .failed(let error): return "Transport has failed: \(error)"
-        }
-    }
-}
-
-extension TransportState: Equatable {
-    public static func == (lhs: TransportState, rhs: TransportState) -> Bool {
-        switch (lhs, rhs) {
-        case (.disconnected, .disconnected),
-            (.connecting, .connecting),
-            (.connected, .connected),
-            (.failed, .failed):
-            return true
-        default:
-            return false
-        }
-    }
-
-}
-
-/// Protocol providing retry capability to transports
-public protocol RetryableTransport: MCPTransport {
-    /// Perform operation with retry
-    func withRetry<T>(
-        operation: String,
-        block: @escaping () async throws -> T
-    ) async throws -> T
-}
-
-extension RetryableTransport {
-    public func withRetry<T>(
-        operation: String,
-        block: @escaping () async throws -> T
-    ) async throws -> T {
-        var attempt = 1
-        var lastError: Error?
-
-        while attempt <= configuration.retryPolicy.maxAttempts {
-            do {
-                return try await block()
-            } catch {
-                lastError = error
-
-                // Don't retry if we've hit max attempts
-                guard attempt < configuration.retryPolicy.maxAttempts else {
-                    break
-                }
-
-                // Calculate delay for next attempt
-                let delay = configuration.retryPolicy.delay(forAttempt: attempt)
-                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-
-                attempt += 1
-            }
-        }
-
-        throw TransportError.operationFailed(lastError!)
-    }
+  /// Calculates the appropriate delay (seconds) for a given attempt number.
+  public func delay(forAttempt attempt: Int) -> TimeInterval {
+    let raw = backoffPolicy.delay(attempt: attempt, baseDelay: baseDelay, jitter: jitter)
+    return min(raw, maxDelay)
+  }
 }

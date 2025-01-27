@@ -31,7 +31,7 @@ import Foundation
 }
 
 /// MCP Error structure following JSON-RPC 2.0 spec
-public struct MCPError: Error, Codable {
+public struct MCPError: Codable, LocalizedError {
     /// Required error code
     public let code: JSONRPCErrorCode
 
@@ -73,12 +73,8 @@ public struct MCPError: Error, Codable {
         }
     }
 
-    public var description: String {
-        var desc = "\(code.description): \(message)"
-        if let data = data {
-            desc += "\n\(data)"
-        }
-        return desc
+    public var errorDescription: String? {
+        "\(code.description): \(message)"
     }
 }
 
