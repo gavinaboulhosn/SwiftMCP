@@ -56,7 +56,7 @@ public actor MCPHost {
   }
 
   private func yieldHostEvent(_ event: MCPHostEvent) {
-    for (_, cont) in hostEventContinuations {
+    for cont in hostEventContinuations.values {
       cont.yield(event)
     }
   }

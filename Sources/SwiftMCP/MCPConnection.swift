@@ -135,7 +135,7 @@ public final class ConnectionState: Identifiable {
   }
 
   private func yieldEvent(_ event: ConnectionStateEvent) {
-    for (_, cont) in eventContinuations {
+    for cont in eventContinuations.values {
       cont.yield(event)
     }
   }
