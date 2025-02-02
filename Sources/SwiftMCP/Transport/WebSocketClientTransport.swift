@@ -19,7 +19,8 @@ public actor WebSocketClientTransport: MCPTransport {
     session = URLSession(
       configuration: .ephemeral,
       delegate: delegate,
-      delegateQueue: nil)
+      delegateQueue: nil
+    )
 
     delegate.onOpen = { [weak self] in
       Task { await self?.handleOpen() }
@@ -51,6 +52,7 @@ public actor WebSocketClientTransport: MCPTransport {
     guard state != .connected else { return }
 
     state = .connecting
+    webSocketTask?.cancel()
     webSocketTask = session.webSocketTask(with: url, protocols: ["mcp"])
     webSocketTask?.resume()
 
@@ -66,7 +68,7 @@ public actor WebSocketClientTransport: MCPTransport {
     messageContinuation?.finish()
   }
 
-  public func send(_ data: Data) async throws {
+  public func send(_ data: Data, timeout: TimeInterval? = nil) async throws {
     guard state == .connected else {
       throw TransportError.invalidState("Not connected")
     }

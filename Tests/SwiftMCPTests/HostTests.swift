@@ -19,7 +19,12 @@ var everythingSSE: MCPTransport {
 }
 
 var smitheryWebsocket: MCPTransport {
-  WebSocketClientTransport(url: URL(string: "wss://app-dd803694-33d0-4d8d-a220-61bf21ca0b27-5u5fdnfupa-uc.a.run.app/ws?config=")!)
+  WebSocketClientTransport(
+    url: URL(
+      string:
+        "wss://app-dd803694-33d0-4d8d-a220-61bf21ca0b27-5u5fdnfupa-uc.a.run.app/ws?config=e30%3D"
+    )!
+  )
 }
 
 @Suite("MCP Hosts")
