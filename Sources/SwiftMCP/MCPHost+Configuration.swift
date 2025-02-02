@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - RootSource
+
 public enum RootSource {
   /// A static list of roots
   case list([Root])
@@ -7,6 +9,8 @@ public enum RootSource {
   /// A dynamic list of roots
   case dynamic(() -> [Root])
 }
+
+// MARK: - RootsConfig
 
 /// Configuration for filesystem roots
 public struct RootsConfig {
@@ -23,11 +27,13 @@ public struct RootsConfig {
 
   var roots: [Root] {
     switch source {
-    case .list(let roots): return roots
-    case .dynamic(let roots): return roots()
+    case .list(let roots): roots
+    case .dynamic(let roots): roots()
     }
   }
 }
+
+// MARK: - SamplingConfig
 
 /// Configuration for AI model sampling
 public struct SamplingConfig {
@@ -38,36 +44,24 @@ public struct SamplingConfig {
   public let handler: SamplingHandler
 
   public init(
-    handler: @escaping SamplingHandler
-  ) {
+    handler: @escaping SamplingHandler)
+  {
     self.handler = handler
   }
 }
 
+// MARK: - MCPConfiguration
+
 public struct MCPConfiguration {
-  /// Broadcasted capabilities for all clients
-  public internal(set) var capabilities: ClientCapabilities
 
-  public var clientInfo: Implementation
-  /// Configuration for filesystem roots
-  public var roots: RootsConfig?
-
-  /// Configuration for AI model sampling
-  public var sampling: SamplingConfig?
-
-  var clientConfig: MCPClient.Configuration {
-    MCPClient.Configuration(
-      clientInfo: clientInfo,
-      capabilities: capabilities
-    )
-  }
+  // MARK: Lifecycle
 
   public init(
     roots: RootsConfig? = nil,
     sampling: SamplingConfig? = nil,
     clientInfo: Implementation = .defaultClient,
-    capabilities: ClientCapabilities = .init()
-  ) {
+    capabilities: ClientCapabilities = .init())
+  {
     self.roots = roots
     self.sampling = sampling
     self.capabilities = capabilities
@@ -83,4 +77,25 @@ public struct MCPConfiguration {
 
     self.capabilities = capabilities
   }
+
+  // MARK: Public
+
+  /// Broadcasted capabilities for all clients
+  public internal(set) var capabilities: ClientCapabilities
+
+  public var clientInfo: Implementation
+  /// Configuration for filesystem roots
+  public var roots: RootsConfig?
+
+  /// Configuration for AI model sampling
+  public var sampling: SamplingConfig?
+
+  // MARK: Internal
+
+  var clientConfig: MCPClient.Configuration {
+    MCPClient.Configuration(
+      clientInfo: clientInfo,
+      capabilities: capabilities)
+  }
+
 }

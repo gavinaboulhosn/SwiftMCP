@@ -1,6 +1,8 @@
 import Foundation
 import OSLog
 
+// MARK: - MCPHostEvent
+
 /// Events emitted by an `MCPHost`:
 /// - connectionAdded: A new connection was added
 /// - connectionRemoved: A connection was removed
@@ -11,21 +13,19 @@ public enum MCPHostEvent {
   case connectionStatusChanged(ConnectionState)
 }
 
+// MARK: - MCPHost
+
 /// The primary interface for interacting with multiple MCP server connections at once.
 public actor MCPHost {
-  private let logger = Logger(subsystem: "SwiftMCP", category: "MCPHost")
 
-  private var configuration: MCPConfiguration
-  private var connections: [String: ConnectionState] = [:]
-  private var notificationTasks: [String: Task<Void, Never>] = [:]
-
-  // Async Streams for host-level events
-  private var hostEventContinuations: [UUID: AsyncStream<MCPHostEvent>.Continuation] = [:]
+  // MARK: Lifecycle
 
   /// Initialize an MCPHost with a given configuration.
   public init(config: MCPConfiguration = .init()) {
-    self.configuration = config
+    configuration = config
   }
+
+  // MARK: Public
 
   // MARK: - Public Event Stream
 
@@ -37,27 +37,6 @@ public actor MCPHost {
       Task { [weak self] in
         await self?.storeHostEventContinuation(id, continuation)
       }
-    }
-  }
-
-  private func storeHostEventContinuation(
-    _ id: UUID, _ cont: AsyncStream<MCPHostEvent>.Continuation
-  ) {
-    hostEventContinuations[id] = cont
-    cont.onTermination = { _ in
-      Task { [weak self] in
-        await self?.removeHostEventContinuation(id)
-      }
-    }
-  }
-
-  private func removeHostEventContinuation(_ id: UUID) {
-    hostEventContinuations.removeValue(forKey: id)
-  }
-
-  private func yieldHostEvent(_ event: MCPHostEvent) {
-    for cont in hostEventContinuations.values {
-      cont.yield(event)
     }
   }
 
@@ -82,8 +61,9 @@ public actor MCPHost {
   @discardableResult
   public func connect(
     _ id: String,
-    transport: MCPTransport
-  ) async throws -> ConnectionState {
+    transport: MCPTransport)
+    async throws -> ConnectionState
+  {
     if connections[id] != nil {
       throw MCPHostError.connectionExists(id)
     }
@@ -107,14 +87,13 @@ public actor MCPHost {
       id: id,
       client: client,
       serverInfo: sessInfo.serverInfo,
-      capabilities: sessInfo.capabilities
-    )
+      capabilities: sessInfo.capabilities)
 
     // Listen to the client's notifications
     let notifTask = Task { [weak self, weak connection] in
       guard let self, let connection else { return }
       for await note in client.notifications {
-        await self.handleNotification(note, for: connection)
+        await handleNotification(note, for: connection)
       }
     }
 
@@ -128,7 +107,7 @@ public actor MCPHost {
     Task.detached { [weak self, weak connection] in
       guard let self, let connection else { return }
       for await _ in connEventStream {
-        await self.yieldHostEvent(.connectionStatusChanged(connection))
+        await yieldHostEvent(.connectionStatusChanged(connection))
       }
     }
 
@@ -179,7 +158,35 @@ public actor MCPHost {
     connections.values.filter { $0.status == .failed }
   }
 
-  // MARK: - Private
+  // MARK: Private
+
+  private var configuration: MCPConfiguration
+  private var connections: [String: ConnectionState] = [:]
+  private var notificationTasks: [String: Task<Void, Never>] = [:]
+
+  /// Async Streams for host-level events
+  private var hostEventContinuations: [UUID: AsyncStream<MCPHostEvent>.Continuation] = [:]
+
+  private func storeHostEventContinuation(
+    _ id: UUID, _ cont: AsyncStream<MCPHostEvent>.Continuation)
+  {
+    hostEventContinuations[id] = cont
+    cont.onTermination = { _ in
+      Task { [weak self] in
+        await self?.removeHostEventContinuation(id)
+      }
+    }
+  }
+
+  private func removeHostEventContinuation(_ id: UUID) {
+    hostEventContinuations.removeValue(forKey: id)
+  }
+
+  private func yieldHostEvent(_ event: MCPHostEvent) {
+    for cont in hostEventContinuations.values {
+      cont.yield(event)
+    }
+  }
 
   /// Handle inbound notifications from a given ConnectionState's client.
   private func handleNotification(_ notification: any MCPNotification, for state: ConnectionState)
@@ -200,6 +207,8 @@ public actor MCPHost {
   }
 }
 
+// MARK: - MCPHostError
+
 /// Host-level errors that are not part of the MCP protocol itself.
 ///
 /// For instance, "no such connection," "connection already exists," or other
@@ -214,16 +223,18 @@ public enum MCPHostError: Error, LocalizedError {
   /// Catch-all for unknown issues
   case unknown(String)
 
+  // MARK: Public
+
   public var errorDescription: String? {
     switch self {
     case .connectionNotFound(let id):
-      return "No connection found for id: \(id)"
+      "No connection found for id: \(id)"
     case .connectionExists(let id):
-      return "A connection with id '\(id)' already exists."
+      "A connection with id '\(id)' already exists."
     case .invalidOperation(let msg):
-      return "Invalid host operation: \(msg)"
+      "Invalid host operation: \(msg)"
     case .unknown(let msg):
-      return "Unknown Host Error: \(msg)"
+      "Unknown Host Error: \(msg)"
     }
   }
 }

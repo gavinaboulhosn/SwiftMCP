@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - MCPTransport
+
 /// A protocol describing the core transport interface for MCP.
 /// It is an `Actor` so that transport operations are serialized.
 public protocol MCPTransport: Actor {
@@ -31,7 +33,7 @@ extension MCPTransport {
     let finalTimeout = timeout ?? configuration.sendTimeout
     try await with(timeout: .microseconds(Int64(finalTimeout * 1_000_000))) { [weak self] in
       guard let self else { return }
-      try await self.send(data, timeout: nil)
+      try await send(data, timeout: nil)
     }
   }
 }
@@ -53,25 +55,28 @@ public enum TransportError: Error, LocalizedError {
   /// Transport type not supported on this platform
   case notSupported(String)
 
+  // MARK: Public
+
   public var errorDescription: String? {
     switch self {
     case .timeout(let op):
-      return "Timeout waiting for operation: \(op)"
+      "Timeout waiting for operation: \(op)"
     case .invalidMessage(let msg):
-      return "Invalid message format: \(msg)"
+      "Invalid message format: \(msg)"
     case .connectionFailed(let detail):
-      return "Connection failed: \(detail)"
+      "Connection failed: \(detail)"
     case .operationFailed(let msg):
-      return "Operation failed: \(msg)"
+      "Operation failed: \(msg)"
     case .invalidState(let reason):
-      return "Invalid state: \(reason)"
+      "Invalid state: \(reason)"
     case .messageTooLarge(let size):
-      return "Message exceeds size limit: \(size)"
+      "Message exceeds size limit: \(size)"
     case .notSupported(let detail):
-      return "Transport type not supported: \(detail)"
+      "Transport type not supported: \(detail)"
     }
   }
 }
+
 /// Represents the high-level connection state of a transport.
 public enum TransportState {
   /// Transport is not connected
@@ -88,25 +93,26 @@ public enum TransportState {
 extension TransportState: CustomStringConvertible, CustomDebugStringConvertible {
   public var description: String {
     switch self {
-    case .disconnected: return "disconnected"
-    case .connecting: return "connecting"
-    case .connected: return "connected"
-    case .failed(let error): return "failed: \(error)"
+    case .disconnected: "disconnected"
+    case .connecting: "connecting"
+    case .connected: "connected"
+    case .failed(let error): "failed: \(error)"
     }
   }
+
   public var debugDescription: String { description }
 }
 
 extension TransportState: Equatable {
-  public static func == (lhs: TransportState, rhs: TransportState) -> Bool {
+  public static func ==(lhs: TransportState, rhs: TransportState) -> Bool {
     switch (lhs, rhs) {
     case (.disconnected, .disconnected),
-      (.connecting, .connecting),
-      (.connected, .connected),
-      (.failed, .failed):
-      return true
+         (.connecting, .connecting),
+         (.connected, .connected),
+         (.failed, .failed):
+      true
     default:
-      return false
+      false
     }
   }
 }
@@ -115,16 +121,16 @@ extension TransportState: Equatable {
 public protocol RetryableTransport: MCPTransport {
   func withRetry<T>(
     operation: String,
-    block: @escaping () async throws -> T
-  ) async throws -> T
+    block: @escaping () async throws -> T) async throws -> T
 }
 
 /// Default implementation of `withRetry`.
 extension RetryableTransport {
   public func withRetry<T>(
-    operation: String,
-    block: @escaping () async throws -> T
-  ) async throws -> T {
+    operation _: String,
+    block: @escaping () async throws -> T)
+    async throws -> T
+  {
     var attempt = 1
     var lastError: Error?
 

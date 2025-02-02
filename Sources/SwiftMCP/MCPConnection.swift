@@ -1,8 +1,10 @@
 import Foundation
-import OSLog
 import Observation
+import OSLog
 
 private let logger = Logger(subsystem: "SwiftMCP", category: "ConnectionState")
+
+// MARK: - ConnectionStateEvent
 
 /// Events that a `ConnectionState` can emit, e.g., status changes.
 public enum ConnectionStateEvent {
@@ -11,9 +13,12 @@ public enum ConnectionStateEvent {
   case clientError(Error)
 }
 
-// Actor to manage continuations safely
+// MARK: - ContinuationStore
+
+/// Actor to manage continuations safely
 private actor ContinuationStore {
-  private var continuations: [UUID: AsyncStream<ConnectionStateEvent>.Continuation] = [:]
+
+  // MARK: Internal
 
   func store(_ id: UUID, _ continuation: AsyncStream<ConnectionStateEvent>.Continuation) {
     continuations[id] = continuation
@@ -28,7 +33,14 @@ private actor ContinuationStore {
       continuation.yield(event)
     }
   }
+
+  // MARK: Private
+
+  private var continuations: [UUID: AsyncStream<ConnectionStateEvent>.Continuation] = [:]
+
 }
+
+// MARK: - ConnectionState
 
 /// A handle for interacting with a specific MCP server connection,
 /// wrapping an `MCPClient`.
@@ -37,6 +49,57 @@ private actor ContinuationStore {
 /// can react to its property changes.
 @Observable
 public final class ConnectionState: Identifiable {
+
+  // MARK: Lifecycle
+
+  /// Create a new ConnectionState wrapper.
+  /// - Parameters:
+  /// - id: A unique identifier for referencing this connection
+  /// - client: The `MCPClient` that powers this connection
+  /// - serverInfo: Implementation details from server
+  /// - capabilities: Advertised server capabilities
+  init(
+    id: String,
+    client: MCPClient,
+    serverInfo: Implementation,
+    capabilities: ServerCapabilities)
+  {
+    self.id = id
+    self.client = client
+    self.serverInfo = serverInfo
+    self.capabilities = capabilities
+
+    // Monitor the client's events to update local status
+    statusMonitorTask = Task { [weak self] in
+      guard let self else { return }
+      let evtStream = await client.events
+      for await event in evtStream {
+        switch event {
+        case .connectionChanged(let state):
+          switch state {
+          case .running:
+            status = .connected
+          case .failed:
+            status = .failed
+          case .disconnected:
+            status = .disconnected
+          case .connecting, .initializing:
+            status = .connecting
+          }
+
+        case .message:
+          break
+
+        case .error(let err):
+          await yieldEvent(.clientError(err))
+          logger.error("MCPClient error: \(err)")
+        }
+      }
+    }
+  }
+
+  // MARK: Public
+
   /// Unique identifier for this connection
   public let id: String
 
@@ -50,33 +113,20 @@ public final class ConnectionState: Identifiable {
   public private(set) var resources: [MCPResource] = []
   public private(set) var prompts: [MCPPrompt] = []
 
-  public private(set) var lastActivity: Date = Date()
-  public private(set) var reconnectCount: Int = 0
-  private let connectedAt: Date = Date()
-
+  public private(set) var lastActivity = Date()
+  public private(set) var reconnectCount = 0
   public private(set) var isRefreshingTools = false
   public private(set) var isRefreshingResources = false
   public private(set) var isRefreshingPrompts = false
 
-  private var statusMonitorTask: Task<Void, Never>?
-
-  /// The underlying MCPClient for this connection
-  let client: MCPClient
-
-  // MARK: - Async Streams for ConnectionState events
-
-  /// Stores the continuation manager
-  @ObservationIgnored
-  private let continuationStore = ContinuationStore()
-
   /// The current `ConnectionStatus`.
   /// Observers may subscribe to `events()` or observe `status` changes if using SwiftUI.
-  public private(set) var status: ConnectionStatus = .connected {
+  public private(set) var status = ConnectionStatus.connected {
     didSet {
       if oldValue != status {
         Task { [weak self] in
           guard let self else { return }
-          await self.yieldEvent(.statusChanged(self.status))
+          await yieldEvent(.statusChanged(status))
         }
       }
     }
@@ -84,50 +134,6 @@ public final class ConnectionState: Identifiable {
 
   /// Whether the connection is logically "connected" from a user perspective
   public var isConnected: Bool { status != .disconnected }
-
-  /// Create a new ConnectionState wrapper.
-  /// - Parameters:
-  /// - id: A unique identifier for referencing this connection
-  /// - client: The `MCPClient` that powers this connection
-  /// - serverInfo: Implementation details from server
-  /// - capabilities: Advertised server capabilities
-  init(
-    id: String,
-    client: MCPClient,
-    serverInfo: Implementation,
-    capabilities: ServerCapabilities
-  ) {
-    self.id = id
-    self.client = client
-    self.serverInfo = serverInfo
-    self.capabilities = capabilities
-
-    // Monitor the client's events to update local status
-    statusMonitorTask = Task { [weak self] in
-      guard let self = self else { return }
-      let evtStream = await client.events
-      for await event in evtStream {
-        switch event {
-        case .connectionChanged(let state):
-          switch state {
-          case .running:
-            self.status = .connected
-          case .failed:
-            self.status = .failed
-          case .disconnected:
-            self.status = .disconnected
-          case .connecting, .initializing:
-            self.status = .connecting
-          }
-        case .message(_):
-          break
-        case .error(let err):
-          await self.yieldEvent(.clientError(err))
-          logger.error("MCPClient error: \(err)")
-        }
-      }
-    }
-  }
 
   // MARK: - Public Async Event Stream
 
@@ -140,26 +146,6 @@ public final class ConnectionState: Identifiable {
         await self?.storeConnectionContinuation(streamId, continuation)
       }
     }
-  }
-
-  private func storeConnectionContinuation(
-    _ id: UUID,
-    _ cont: AsyncStream<ConnectionStateEvent>.Continuation
-  ) async {
-    await continuationStore.store(id, cont)
-    cont.onTermination = { [weak self] _ in
-      Task { [weak self] in
-        await self?.removeConnectionContinuation(id)
-      }
-    }
-  }
-
-  private func removeConnectionContinuation(_ id: UUID) async {
-    await continuationStore.remove(id)
-  }
-
-  private func yieldEvent(_ event: ConnectionStateEvent) async {
-    await continuationStore.yieldToAll(event)
   }
 
   // MARK: - High-Level Operations
@@ -179,7 +165,8 @@ public final class ConnectionState: Identifiable {
     defer { isRefreshingTools = false }
 
     do {
-      logger.debug("ConnectionState [\(self.id)] -> listing tools.")
+      let connectionId = id
+      logger.debug("ConnectionState [\(connectionId)] -> listing tools.")
       let result = try await client.listTools()
       tools = result.tools
       lastActivity = Date()
@@ -196,7 +183,8 @@ public final class ConnectionState: Identifiable {
     defer { isRefreshingResources = false }
 
     do {
-      logger.debug("ConnectionState [\(self.id)] -> listing resources.")
+      let connectionId = id
+      logger.debug("ConnectionState [\(connectionId)] -> listing resources.")
       let result = try await client.listResources()
       resources = result.resources
       lastActivity = Date()
@@ -213,7 +201,8 @@ public final class ConnectionState: Identifiable {
     defer { isRefreshingPrompts = false }
 
     do {
-      logger.debug("ConnectionState [\(self.id)] -> listing prompts.")
+      let connectionId = id
+      logger.debug("ConnectionState [\(connectionId)] -> refreshPrompts.")
       let result = try await client.listPrompts()
       prompts = result.prompts
       lastActivity = Date()
@@ -225,7 +214,9 @@ public final class ConnectionState: Identifiable {
   /// Attempt to reconnect the underlying MCPClient.
   public func reconnect() async throws {
     reconnectCount += 1
-    logger.info("ConnectionState [\(self.id)] reconnection attempt #\(self.reconnectCount)")
+    let connectionId = id
+    let attempt = reconnectCount
+    logger.info("ConnectionState [\(connectionId)] reconnection attempt #\(attempt)")
     try await client.reconnect()
   }
 
@@ -235,8 +226,9 @@ public final class ConnectionState: Identifiable {
   public func callTool(
     _ name: String,
     arguments: [String: Any]? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> CallToolResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> CallToolResult
+  {
     guard isConnected, capabilities.supports(.tools) else {
       throw MCPHostError.invalidOperation("Tool usage not supported or disconnected.")
     }
@@ -248,8 +240,9 @@ public final class ConnectionState: Identifiable {
   /// Read a named resource from the server, with optional progress updates.
   public func readResource(
     _ uri: String,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> ReadResourceResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> ReadResourceResult
+  {
     guard isConnected, capabilities.supports(.resources) else {
       throw MCPHostError.invalidOperation("Resource usage not supported or disconnected.")
     }
@@ -281,8 +274,9 @@ public final class ConnectionState: Identifiable {
   /// List available prompts from the server, potentially using a cursor for pagination.
   public func listPrompts(
     cursor: String? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> ListPromptsResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> ListPromptsResult
+  {
     guard isConnected, capabilities.supports(.prompts) else {
       throw MCPHostError.invalidOperation("Prompt usage not supported or disconnected.")
     }
@@ -295,8 +289,9 @@ public final class ConnectionState: Identifiable {
   public func getPrompt(
     _ name: String,
     arguments: [String: String]? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> GetPromptResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> GetPromptResult
+  {
     guard isConnected, capabilities.supports(.prompts) else {
       throw MCPHostError.invalidOperation("Prompt usage not supported or disconnected.")
     }
@@ -304,16 +299,56 @@ public final class ConnectionState: Identifiable {
     lastActivity = Date()
     return result
   }
+
+  // MARK: Internal
+
+  /// The underlying MCPClient for this connection
+  let client: MCPClient
+
+  // MARK: Private
+
+  private var statusMonitorTask: Task<Void, Never>?
+
+  // MARK: - Async Streams for ConnectionState events
+
+  /// Stores the continuation manager
+  @ObservationIgnored private let continuationStore = ContinuationStore()
+
+  private func storeConnectionContinuation(
+    _ id: UUID,
+    _ cont: AsyncStream<ConnectionStateEvent>.Continuation)
+    async
+  {
+    await continuationStore.store(id, cont)
+    cont.onTermination = { [weak self] _ in
+      Task { [weak self] in
+        await self?.removeConnectionContinuation(id)
+      }
+    }
+  }
+
+  private func removeConnectionContinuation(_ id: UUID) async {
+    await continuationStore.remove(id)
+  }
+
+  private func yieldEvent(_ event: ConnectionStateEvent) async {
+    await continuationStore.yieldToAll(event)
+  }
+
 }
 
+// MARK: Equatable
+
 extension ConnectionState: Equatable {
-  public static func == (lhs: ConnectionState, rhs: ConnectionState) -> Bool {
+  public static func ==(lhs: ConnectionState, rhs: ConnectionState) -> Bool {
     lhs.id == rhs.id && lhs.status == rhs.status && lhs.serverInfo == rhs.serverInfo
       && lhs.capabilities == rhs.capabilities && lhs.tools == rhs.tools
       && lhs.resources == rhs.resources && lhs.prompts == rhs.prompts
       && lhs.lastActivity == rhs.lastActivity && lhs.reconnectCount == rhs.reconnectCount
   }
 }
+
+// MARK: - ConnectionStatus
 
 /// Represents the overall connection status from a high-level perspective.
 public enum ConnectionStatus: Equatable, Sendable {
@@ -322,15 +357,15 @@ public enum ConnectionStatus: Equatable, Sendable {
   case disconnected
   case failed
 
-  public static func == (lhs: ConnectionStatus, rhs: ConnectionStatus) -> Bool {
+  public static func ==(lhs: ConnectionStatus, rhs: ConnectionStatus) -> Bool {
     switch (lhs, rhs) {
     case (.connected, .connected),
-      (.connecting, .connecting),
-      (.disconnected, .disconnected),
-      (.failed, .failed):
-      return true
+         (.connecting, .connecting),
+         (.disconnected, .disconnected),
+         (.failed, .failed):
+      true
     default:
-      return false
+      false
     }
   }
 }

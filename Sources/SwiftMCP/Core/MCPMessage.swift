@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - MCPVersion
+
 public enum MCPVersion {
   static let currentVersion = "2024-11-05"
   public static let supportedVersions = ["2024-11-05", "2024-10-07"]
@@ -8,6 +10,8 @@ public enum MCPVersion {
     supportedVersions.contains(version)
   }
 }
+
+// MARK: - MCPMessage
 
 /// Core protocol marker for all MCP messages
 public protocol MCPMessage: Codable, Sendable {
@@ -40,7 +44,7 @@ public struct RequestMeta: Codable, Sendable {
   var progressToken: ProgressToken?
 }
 
-// Base params interface matching schema
+/// Base params interface matching schema
 public protocol MCPRequestParams: Codable, Sendable {
   var _meta: RequestMeta? { get set }
 }
@@ -95,28 +99,30 @@ public enum MCPClientRequest: Codable {
   case readResource(ReadResourceRequest)
   case ping(PingRequest)
 
+  // MARK: Internal
+
   var request: any MCPRequest {
     switch self {
     case .listPrompts(let request):
-      return request
+      request
     case .listTools(let request):
-      return request
+      request
     case .callTool(let request):
-      return request
+      request
     case .setLoggingLevel(let request):
-      return request
+      request
     case .listResources(let request):
-      return request
+      request
     case .subscribe(let request):
-      return request
+      request
     case .unsubscribe(let request):
-      return request
+      request
     case .listResourceTemplates(let request):
-      return request
+      request
     case .readResource(let request):
-      return request
+      request
     case .ping(let request):
-      return request
+      request
     }
   }
 }

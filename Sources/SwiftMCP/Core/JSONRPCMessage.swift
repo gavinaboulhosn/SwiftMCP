@@ -1,13 +1,12 @@
 import Foundation
 
+// MARK: - JSONRPCMessage
+
 /// A JSON-RPC 2.0 message in the MCP protocol.
 ///
 /// It can be a request, response, error, or notification.
 /// Requests and responses are strongly typed thanks to generics.
 enum JSONRPCMessage: Codable {
-  /// JSON-RPC version constant
-  var jsonrpcVersion: String { "2.0" }
-
   /// A request message expecting a response.
   case request(id: RequestID, request: any MCPRequest)
 
@@ -20,32 +19,7 @@ enum JSONRPCMessage: Codable {
   /// A notification message that doesn't expect a response.
   case notification(any MCPNotification)
 
-  private enum CodingKeys: String, CodingKey {
-    case jsonrpc, id, method, params, result, error
-  }
-
-  func encode(to encoder: Encoder) throws {
-    try validateVersion()
-
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    try container.encode(jsonrpcVersion, forKey: .jsonrpc)
-
-    switch self {
-    case .request(let id, let request):
-      try container.encode(id, forKey: .id)
-      try container.encode(type(of: request).method, forKey: .method)
-      try container.encodeAny(request.params, forKey: .params)
-    case .response(let id, let response):
-      try container.encode(id, forKey: .id)
-      try container.encode(response, forKey: .result)
-    case .error(let id, let error):
-      try container.encode(id, forKey: .id)
-      try container.encode(error, forKey: .error)
-    case .notification(let notification):
-      try container.encode(type(of: notification).method, forKey: .method)
-      try container.encodeAny(notification.params, forKey: .params)
-    }
-  }
+  // MARK: Lifecycle
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -84,6 +58,43 @@ enum JSONRPCMessage: Codable {
     try validateVersion()
   }
 
+  // MARK: Internal
+
+  /// JSON-RPC version constant
+  var jsonrpcVersion: String { "2.0" }
+
+  func encode(to encoder: Encoder) throws {
+    try validateVersion()
+
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(jsonrpcVersion, forKey: .jsonrpc)
+
+    switch self {
+    case .request(let id, let request):
+      try container.encode(id, forKey: .id)
+      try container.encode(type(of: request).method, forKey: .method)
+      try container.encodeAny(request.params, forKey: .params)
+
+    case .response(let id, let response):
+      try container.encode(id, forKey: .id)
+      try container.encode(response, forKey: .result)
+
+    case .error(let id, let error):
+      try container.encode(id, forKey: .id)
+      try container.encode(error, forKey: .error)
+
+    case .notification(let notification):
+      try container.encode(type(of: notification).method, forKey: .method)
+      try container.encodeAny(notification.params, forKey: .params)
+    }
+  }
+
+  // MARK: Private
+
+  private enum CodingKeys: String, CodingKey {
+    case jsonrpc, id, method, params, result, error
+  }
+
   private func validateRPCVersion(_ version: String) throws {
     guard version == jsonrpcVersion else {
       throw MCPError.invalidRequest("Invalid JSON-RPC version")
@@ -100,7 +111,7 @@ extension JSONRPCMessage {
 struct EmptyRequest: MCPRequest {
   typealias Response = EmptyResult
 
-  var params: EmptyParams = .init()
+  var params = EmptyParams()
 
   static let method = "empty"
 }
@@ -110,4 +121,4 @@ struct EmptyResult: MCPResponse {
   var _meta: [String: AnyCodable]?
 }
 
-extension JSONRPCMessage: MCPMessage {}
+extension JSONRPCMessage: MCPMessage { }

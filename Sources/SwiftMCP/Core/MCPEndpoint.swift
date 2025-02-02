@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - MCPEndpointProtocol
+
 /// Protocol defining common behavior for MCP endpoints
 public protocol MCPEndpointProtocol: Actor {
   associatedtype SessionInfo: Equatable
@@ -20,6 +22,8 @@ public protocol MCPEndpointProtocol: Actor {
   func send<R: MCPRequest>(_ request: R) async throws -> R.Response
 }
 
+// MARK: - MCPEndpointState
+
 /// Common state representation for MCP endpoints
 public enum MCPEndpointState<State: Equatable>: Equatable {
   /// Endpoint is disconnected
@@ -37,19 +41,21 @@ public enum MCPEndpointState<State: Equatable>: Equatable {
   /// Endpoint has failed
   case failed(Error)
 
-  public static func == (lhs: MCPEndpointState, rhs: MCPEndpointState) -> Bool {
+  // MARK: Public
+
+  public static func ==(lhs: MCPEndpointState, rhs: MCPEndpointState) -> Bool {
     switch (lhs, rhs) {
     case (.disconnected, .disconnected),
-      (.connecting, .connecting),
-      (.initializing, .initializing):
-      return true
+         (.connecting, .connecting),
+         (.initializing, .initializing):
+      true
     case (.running(let lCap), .running(let rCap)):
-      return lCap == rCap
+      lCap == rCap
     case (.failed, .failed):
       // Don't compare errors, just that both are failed
-      return true
+      true
     default:
-      return false
+      false
     }
   }
 }

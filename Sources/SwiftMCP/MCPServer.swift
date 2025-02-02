@@ -1,8 +1,10 @@
 import Foundation
 
-public protocol MCPServerProtocol {
+// MARK: - MCPServerProtocol
 
-}
+public protocol MCPServerProtocol { }
+
+// MARK: - MCPServerConfiguration
 
 // public struct MCPServerFeature: OptionSet {
 //   public let rawValue: UInt

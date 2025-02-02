@@ -3,6 +3,8 @@ import OSLog
 
 private let logger = Logger(subsystem: "SwiftMCP", category: "SSEClientTransport")
 
+// MARK: - SSEClientTransport
+
 /// A concrete implementation of `MCPTransport` providing Server-Sent Events (SSE) support.
 ///
 /// This transport uses:
@@ -11,25 +13,7 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "SSEClientTransport
 /// It also supports retries via `RetryableTransport`.
 public actor SSEClientTransport: MCPTransport, RetryableTransport {
 
-  public private(set) var state: TransportState = .disconnected
-  public private(set) var configuration: TransportConfiguration
-
-  /// SSE endpoint URL
-  private let sseURL: URL
-  /// Optional post URL, typically discovered from an SSE `endpoint` event
-  private(set) var postURL: URL?
-
-  /// Session used for SSE streaming and short-lived POST
-  private let session: URLSession
-
-  /// Task that runs the indefinite SSE read loop
-  private var sseReadTask: Task<Void, Never>?
-
-  /// Continuation used by `messages()` for inbound SSE messages
-  private var messagesContinuation: AsyncThrowingStream<Data, Error>.Continuation?
-
-  /// A single continuation used to await `postURL` if we haven't discovered it yet
-  private var postURLWaitContinuation: CheckedContinuation<URL, Error>?
+  // MARK: Lifecycle
 
   /// Initialize an SSEClientTransport.
   ///
@@ -40,14 +24,19 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   public init(
     sseURL: URL,
     postURL: URL? = nil,
-    configuration: TransportConfiguration = .default
-  ) {
+    configuration: TransportConfiguration = .default)
+  {
     self.sseURL = sseURL
     self.postURL = postURL
     self.configuration = configuration
-    self.session = URLSession(configuration: .ephemeral)
+    session = URLSession(configuration: .ephemeral)
     logger.debug("Initialized SSEClientTransport with sseURL=\(sseURL.absoluteString)")
   }
+
+  // MARK: Public
+
+  public private(set) var state = TransportState.disconnected
+  public private(set) var configuration: TransportConfiguration
 
   /// Provides a stream of inbound SSE messages as `Data`.
   /// This call does not start the transport if it's not already started. The caller must `start()` first if needed.
@@ -57,23 +46,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
         await self?.storeMessagesContinuation(continuation)
       }
     }
-  }
-
-  /// Internally store the messages continuation inside the actor.
-  private func storeMessagesContinuation(_ cont: AsyncThrowingStream<Data, Error>.Continuation) {
-    messagesContinuation = cont
-    cont.onTermination = { _ in
-      Task { [weak self] in
-        await self?.handleMessagesStreamTerminated()
-      }
-    }
-  }
-
-  /// Called when the consumer of `messages()` cancels their stream.
-  private func handleMessagesStreamTerminated() {
-    // Must remain on actor
-    logger.debug("Messages stream terminated by consumer. Stopping SSE transport.")
-    stop()
   }
 
   /// Starts the SSE connection by launching the read loop.
@@ -120,12 +92,81 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     }
   }
 
+  // MARK: - RetryableTransport
+
+  /// Retry a block of code with the configured `TransportRetryPolicy`.
+  public func withRetry<T>(
+    operation: String,
+    block: @escaping () async throws -> T)
+    async throws -> T
+  {
+    var attempt = 1
+    let maxAttempts = configuration.retryPolicy.maxAttempts
+    var lastError: Error?
+
+    while attempt <= maxAttempts {
+      do {
+        return try await block()
+      } catch {
+        lastError = error
+        guard attempt < maxAttempts else { break }
+
+        let delay = configuration.retryPolicy.delay(forAttempt: attempt)
+        logger.warning("\(operation) failed (attempt \(attempt)). Retrying in \(delay) seconds.")
+        try await Task.sleep(for: .seconds(delay))
+        attempt += 1
+      }
+    }
+    throw TransportError.operationFailed(
+      "\(operation) failed after \(maxAttempts) attempts: \(String(describing: lastError))")
+  }
+
+  // MARK: Internal
+
+  /// Optional post URL, typically discovered from an SSE `endpoint` event
+  private(set) var postURL: URL?
+
+  // MARK: Private
+
+  /// SSE endpoint URL
+  private let sseURL: URL
+
+  /// Session used for SSE streaming and short-lived POST
+  private let session: URLSession
+
+  /// Task that runs the indefinite SSE read loop
+  private var sseReadTask: Task<Void, Never>?
+
+  /// Continuation used by `messages()` for inbound SSE messages
+  private var messagesContinuation: AsyncThrowingStream<Data, Error>.Continuation?
+
+  /// A single continuation used to await `postURL` if we haven't discovered it yet
+  private var postURLWaitContinuation: CheckedContinuation<URL, Error>?
+
+  /// Internally store the messages continuation inside the actor.
+  private func storeMessagesContinuation(_ cont: AsyncThrowingStream<Data, Error>.Continuation) {
+    messagesContinuation = cont
+    cont.onTermination = { _ in
+      Task { [weak self] in
+        await self?.handleMessagesStreamTerminated()
+      }
+    }
+  }
+
+  /// Called when the consumer of `messages()` cancels their stream.
+  private func handleMessagesStreamTerminated() {
+    // Must remain on actor
+    logger.debug("Messages stream terminated by consumer. Stopping SSE transport.")
+    stop()
+  }
+
   // MARK: - SSE Read Loop
 
   /// Main SSE read loop, reading lines from the SSE endpoint and yielding them as needed.
   private func runSSEReadLoop() async {
+    let endpoint = sseURL
     do {
-      var request = URLRequest(url: sseURL)
+      var request = URLRequest(url: endpoint)
       request.timeoutInterval = configuration.connectTimeout
       request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
@@ -134,7 +175,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
 
       state = .connected
       logger.info(
-        "SSEClientTransport connected to \(self.sseURL.absoluteString, privacy: .private).")
+        "SSEClientTransport connected to \(endpoint.absoluteString, privacy: .private).")
 
       // Accumulate lines into SSE events
       var dataBuffer = Data()
@@ -162,9 +203,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
         } else if line.hasPrefix("retry:") {
           if let ms = parseRetry(line) {
             configuration.retryPolicy.baseDelay = TimeInterval(ms) / 1000.0
-            logger.info(
-              "SSEClientTransport updated retry baseDelay to \(self.configuration.retryPolicy.baseDelay) sec."
-            )
           }
         } else {
           logger.debug("SSEClientTransport ignoring unknown line: \(line)")
@@ -192,7 +230,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   }
 
   /// Parse and handle a single SSE event upon encountering a blank line.
-  private func handleSSEEvent(type: String, id: String?, data: Data) async throws {
+  private func handleSSEEvent(type: String, id _: String?, data: Data) async throws {
     logger.debug("SSE event type=\(type), size=\(data.count) bytes.")
     switch type {
     case "message":
@@ -206,7 +244,8 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
 
   /// Validate that the SSE endpoint returned a successful 200 OK response.
   private func validateHTTPResponse(_ response: URLResponse) throws {
-    guard let httpResponse = response as? HTTPURLResponse,
+    guard
+      let httpResponse = response as? HTTPURLResponse,
       httpResponse.statusCode == 200
     else {
       throw TransportError.operationFailed("SSE request did not return HTTP 200.")
@@ -223,7 +262,8 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
       throw TransportError.invalidMessage("Empty or invalid 'endpoint' SSE event.")
     }
 
-    guard let baseURL = URL(string: "/", relativeTo: sseURL)?.baseURL,
+    guard
+      let baseURL = URL(string: "/", relativeTo: sseURL)?.baseURL,
       let newURL = URL(string: text, relativeTo: baseURL)
     else {
       throw TransportError.invalidMessage("Could not form absolute endpoint from: \(text)")
@@ -249,8 +289,9 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   private func performPOSTSend(
     _ data: Data,
     to url: URL,
-    timeout: TimeInterval?
-  ) async throws {
+    timeout: TimeInterval?)
+    async throws
+  {
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.timeoutInterval = timeout ?? configuration.sendTimeout
@@ -258,7 +299,8 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
     let (_, response) = try await session.data(for: request)
-    guard let httpResp = response as? HTTPURLResponse,
+    guard
+      let httpResp = response as? HTTPURLResponse,
       (200...299).contains(httpResp.statusCode)
     else {
       throw TransportError.operationFailed("POST request to \(url) failed with non-2xx response.")
@@ -282,41 +324,14 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     }
   }
 
-  // MARK: - RetryableTransport
-
-  /// Retry a block of code with the configured `TransportRetryPolicy`.
-  public func withRetry<T>(
-    operation: String,
-    block: @escaping () async throws -> T
-  ) async throws -> T {
-    var attempt = 1
-    let maxAttempts = configuration.retryPolicy.maxAttempts
-    var lastError: Error?
-
-    while attempt <= maxAttempts {
-      do {
-        return try await block()
-      } catch {
-        lastError = error
-        guard attempt < maxAttempts else { break }
-
-        let delay = configuration.retryPolicy.delay(forAttempt: attempt)
-        logger.warning("\(operation) failed (attempt \(attempt)). Retrying in \(delay) seconds.")
-        try await Task.sleep(for: .seconds(delay))
-        attempt += 1
-      }
-    }
-    throw TransportError.operationFailed(
-      "\(operation) failed after \(maxAttempts) attempts: \(String(describing: lastError))")
-  }
-
   // MARK: - Timeout Helper
 
   /// Simple concurrency-based timeout wrapper for async operations.
   private func withThrowingTimeout<T>(
     seconds: TimeInterval,
-    operation: @escaping () async throws -> T
-  ) async throws -> T {
+    operation: @escaping () async throws -> T)
+    async throws -> T
+  {
     try await withThrowingTaskGroup(of: T.self) { group in
       group.addTask { try await operation() }
       group.addTask {
@@ -344,7 +359,7 @@ extension AsyncSequence where Element == UInt8 {
             if byte == UInt8(ascii: "\n") {
               // End of line
               if buffer.isEmpty {
-                continuation.yield("")  // blank line
+                continuation.yield("") // blank line
               } else {
                 if let line = String(data: Data(buffer), encoding: .utf8) {
                   continuation.yield(line)

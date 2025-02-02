@@ -1,13 +1,31 @@
 {
-  "originHash" : "c5bd288c350cee66ea4c15553bf75c99902caf86d726465f8aa315fcc35398bc",
+  "originHash" : "c588f4f0cd090ec209f4a7bfd03f559fb18c7fbb400fb380f8160e81b7ac42f4",
   "pins" : [
+    {
+      "identity" : "swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/airbnb/swift",
+      "state" : {
+        "revision" : "c7e833face3f893b8defde66eecb66f24b55ca35",
+        "version" : "1.0.8"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "41982a3656a71c768319979febd796c6fd111d5c",
+        "version" : "1.5.0"
+      }
+    },
     {
       "identity" : "swift-json-schema",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gavinaboulhosn/swift-json-schema.git",
+      "location" : "https://github.com/ajevans99/swift-json-schema.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "be5966f5284482c3b91ab041b0486ccb2acc64a2"
+        "revision" : "707fc4c2d53138e8fbb4ee9e6669b050ba4b2239",
+        "version" : "0.3.2"
       }
     },
     {
