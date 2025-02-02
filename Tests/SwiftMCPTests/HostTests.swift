@@ -18,13 +18,17 @@ var everythingSSE: MCPTransport {
   SSEClientTransport(sseURL: .init(string: "http://localhost:8000/sse")!)
 }
 
+var smitheryWebsocket: MCPTransport {
+  WebSocketClientTransport(url: URL(string: "wss://app-dd803694-33d0-4d8d-a220-61bf21ca0b27-5u5fdnfupa-uc.a.run.app/ws?config=")!)
+}
+
 @Suite("MCP Hosts")
 struct MCPHostTests {
   var configuration = MCPConfiguration(
     roots: .list([])
   )
 
-  @Test("Host Connection", .serialized, arguments: [everythingStdio, everythingSSE])
+  @Test("Host Connection", .serialized, arguments: [smitheryWebsocket])
   func testHostConnection(_ transport: MCPTransport) async throws {
     let host = MCPHost(config: configuration)
 

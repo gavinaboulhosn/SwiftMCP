@@ -19,10 +19,10 @@ public struct TransportConfiguration {
   /// - maxReconnectAttempts: Max attempts to reconnect on health check failures
   public init(
     connectTimeout: TimeInterval = 120.0,
-    sendTimeout: TimeInterval = 1200.0,
+    sendTimeout: TimeInterval = 120.0,
     maxMessageSize: Int = 4_194_304, // 4 MB
     retryPolicy: TransportRetryPolicy = .default,
-    healthCheckEnabled: Bool = false,
+    healthCheckEnabled: Bool = true,
     healthCheckInterval: TimeInterval = 30.0,
     maxReconnectAttempts: Int = 3)
   {

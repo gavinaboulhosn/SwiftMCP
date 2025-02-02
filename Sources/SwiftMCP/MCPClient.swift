@@ -29,7 +29,8 @@ public actor MCPClient: MCPEndpointProtocol {
     clientInfo: Implementation,
     capabilities: ClientCapabilities = .init())
   {
-    let (notifications, notificationsContinuation) = AsyncStream.makeStream(of: (any MCPNotification).self)
+    let (notifications, notificationsContinuation) = AsyncStream.makeStream(
+      of: (any MCPNotification).self)
     self.notifications = notifications
     self.notificationsContinuation = notificationsContinuation
 
@@ -505,14 +506,6 @@ public actor MCPClient: MCPEndpointProtocol {
   private func handleError(_ error: Error) async {
     logger.error("MCPClient encountered error: \(error). Transitioning to failed state.")
     state = .failed(error)
-    do {
-      try Task.checkCancellation()
-      // Attempt reconnect
-      try await reconnect()
-    } catch {
-      logger.error("Failed to reconnect after error: \(error). Client is stopping.")
-    }
-
     // Cancel pending requests
     for pending in pendingRequests.values {
       pending.cancel(with: error)
