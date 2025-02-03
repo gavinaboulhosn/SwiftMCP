@@ -302,26 +302,34 @@ public actor StdioTransport: MCPTransport {
 
   // MARK: Lifecycle
 
-  public init(
-    options _: StdioTransportOptions,
-    configuration: TransportConfiguration = .default)
+
+  public init(configuration: StdioTransportConfiguration = .dummyData)
   {
-    self.configuration = configuration
+    self._configuration = configuration
   }
 
-  public init(
-    command _: String,
-    arguments _: [String] = [],
-    environment _: [String: String]? = nil,
+  public convenience init(
+    command: String,
+    arguments: [String] = [],
+    environment: [String: String] = [:],
     configuration: TransportConfiguration = .default)
   {
-    self.configuration = configuration
+    let configuration = StdioTransportConfiguration(
+      command: command,
+      arguments: arguments,
+      environment: environment,
+      baseConfiguration: configuration)
+    self.init(configuration: configuration)
   }
 
   // MARK: Public
 
   public private(set) var state = TransportState.disconnected
-  public let configuration: TransportConfiguration
+  private var _configuration: StdioTransportConfiguration
+
+  public var configuration: TransportConfiguration {
+    _configuration.baseConfiguration
+  }
 
   public var isRunning: Bool { false }
 

@@ -244,7 +244,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
       for (k, v) in sseHeaders {
         request.addValue(v, forHTTPHeaderField: k)
       }
-      logger.error("NOAH: \(sseHeaders)")
 
       let (byteStream, response) = try await session.bytes(for: request)
       try validateHTTPResponse(response)
@@ -375,7 +374,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     for (k, v) in postHeaders {
       request.setValue(v, forHTTPHeaderField: k)
     }
-    logger.error("NOAH request headers \(postHeaders)")
 
     let (_, response) = try await session.data(for: request)
     guard
