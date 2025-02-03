@@ -5,19 +5,29 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "StdioTransport")
 
 // MARK: - StdioTransportOptions
 
-public struct StdioTransportOptions {
-  public let command: String
-  public let arguments: [String]
-  public let environment: [String: String]?
+extension StdioTransportConfiguration {
+  public static let dummyData = StdioTransportConfiguration(
+    command: "/dev/null",
+    arguments: ["some", "args"],
+    environment: ["another": "env"],
+    baseConfiguration: .dummyData)
+}
 
+public struct StdioTransportConfiguration: Codable {
+  public var command: String
+  public var arguments: [String]
+  public var environment: [String: String]
+  public var baseConfiguration: TransportConfiguration
   public init(
     command: String,
     arguments: [String] = [],
-    environment: [String: String]? = nil)
+    environment: [String: String] = [:],
+    baseConfiguration: TransportConfiguration = .default)
   {
     self.command = command
     self.arguments = arguments
     self.environment = environment
+    self.baseConfiguration = baseConfiguration
   }
 }
 
@@ -33,35 +43,33 @@ public actor StdioTransport: MCPTransport {
 
   /// Initialize a stdio transport for a command-line MCP server
   /// - Parameters:
-  ///   - options: Transport options
   ///   - configuration: Transport configuration
-  public init(
-    options: StdioTransportOptions,
-    configuration: TransportConfiguration = .default)
-  {
-    command = options.command
-    arguments = options.arguments
-    environment = options.environment
-    self.configuration = configuration
+  public init(configuration: StdioTransportConfiguration) {
+    _configuration = configuration
   }
 
   /// Convenience initializer
-  public init(
+  public convenience init(
     command: String,
     arguments: [String] = [],
-    environment: [String: String]? = nil,
+    environment: [String: String] = [:],
     configuration: TransportConfiguration = .default)
   {
-    self.command = command
-    self.arguments = arguments
-    self.environment = environment
-    self.configuration = configuration
+    let configuration = StdioTransportConfiguration(
+      command: command,
+      arguments: arguments,
+      environment: environment,
+      baseConfiguration: configuration)
+    self.init(configuration: configuration)
   }
 
   // MARK: Public
 
   public private(set) var state = TransportState.disconnected
-  public let configuration: TransportConfiguration
+
+  public var configuration: TransportConfiguration {
+    _configuration.baseConfiguration
+  }
 
   public var isRunning: Bool {
     process?.isRunning ?? false
@@ -110,7 +118,7 @@ public actor StdioTransport: MCPTransport {
 
     // Merge environment
     var processEnv = ProcessInfo.processInfo.environment
-    environment?.forEach { processEnv[$0] = $1 }
+    environment.forEach { processEnv[$0] = $1 }
 
     // Ensure PATH includes typical node/npm locations
     if var path = processEnv["PATH"] {
@@ -209,10 +217,7 @@ public actor StdioTransport: MCPTransport {
 
   // MARK: Private
 
-  // Stored options for constructing the process each time
-  private let command: String
-  private let arguments: [String]
-  private let environment: [String: String]?
+  private var _configuration: StdioTransportConfiguration
 
   // Process & pipes are recreated on each start()
   private var process: Process?
@@ -222,6 +227,11 @@ public actor StdioTransport: MCPTransport {
 
   private var messagesContinuation: AsyncThrowingStream<Data, Error>.Continuation?
   private var processTask: Task<Void, Never>?
+
+  // Stored options for constructing the process each time
+  private var command: String { _configuration.command }
+  private var arguments: [String] { _configuration.arguments }
+  private var environment: [String: String] { _configuration.environment }
 
   // MARK: - Internal reading tasks
 

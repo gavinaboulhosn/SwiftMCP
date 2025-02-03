@@ -5,6 +5,56 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "SSEClientTransport
 
 // MARK: - SSEClientTransport
 
+extension SSETransportConfiguration {
+  public static let dummyData = SSETransportConfiguration(
+    sseURL: URL("http://localhost:3000")!,
+    postURL: nil,
+    sseHeaders: ["some": "sse-value"],
+    postHeaders: ["another": "post-value"],
+    baseConfiguration: .dummyData)
+}
+
+/// Configuration settings for an SSE Transport option
+public struct SSETransportConfiguration: Codable {
+
+  // MARK: Lifecycle
+
+  public init(
+    sseURL: URL,
+    postURL: URL? = nil,
+    sseHeaders: [String: String] = SSETransportConfiguration.defaultSSEHeaders,
+    postHeaders: [String: String] = SSETransportConfiguration.defaultPOSTHeaders,
+    baseConfiguration: TransportConfiguration = .default)
+  {
+    self.sseURL = sseURL
+    self.postURL = postURL
+    self.sseHeaders = sseHeaders
+    self.postHeaders = postHeaders
+    self.baseConfiguration = baseConfiguration
+  }
+
+  // MARK: Public
+
+  public static let defaultSSEHeaders: [String: String] = [
+    "Accept": "text/event-stream",
+  ]
+  public static let defaultPOSTHeaders: [String: String] = [
+    "Content-Type": "application/json",
+  ]
+
+  public var sseURL: URL
+  public var postURL: URL?
+  public var sseHeaders: [String: String]
+  public var postHeaders: [String: String]
+  // TODO: does cookie / auth storage need to be on here too?
+  public var baseConfiguration: TransportConfiguration
+
+}
+
+extension TransportConfiguration {
+  public static let defaultSSE = TransportConfiguration()
+}
+
 /// A concrete implementation of `MCPTransport` providing Server-Sent Events (SSE) support.
 ///
 /// This transport uses:
@@ -18,25 +68,54 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   /// Initialize an SSEClientTransport.
   ///
   /// - Parameters:
-  ///   - sseURL: The SSE endpoint URL for receiving events.
-  ///   - postURL: Optional known URL for POSTing data. If not provided, we discover it via SSE events.
-  ///   - configuration: The `TransportConfiguration` to use.
+  ///   - configuration: The SSE Transport Configuration object. Required.
   public init(
+    configuration: SSETransportConfiguration)
+  {
+    _configuration = configuration
+    session = URLSession(configuration: .ephemeral)
+    // TODO: revisit auth settings
+    session.configuration.httpShouldSetCookies = true
+    session.configuration.httpCookieAcceptPolicy = .always
+    session.configuration.timeoutIntervalForRequest = configuration.baseConfiguration.requestTimeout
+    session.configuration.timeoutIntervalForResource = configuration.baseConfiguration.responseTimeout
+    session.configuration.waitsForConnectivity = configuration.baseConfiguration.connectTimeout > 0
+    logger.debug("Initialized SSEClientTransport with sseURL=\(configuration.sseURL.absoluteString)")
+  }
+
+  public convenience init(
     sseURL: URL,
     postURL: URL? = nil,
-    configuration: TransportConfiguration = .default)
+    sseHeaders: [String: String] = [:],
+    postHeaders: [String: String] = [:],
+    baseConfiguration: TransportConfiguration = .defaultSSE)
   {
-    self.sseURL = sseURL
-    self.postURL = postURL
-    self.configuration = configuration
-    session = URLSession(configuration: .ephemeral)
-    logger.debug("Initialized SSEClientTransport with sseURL=\(sseURL.absoluteString)")
+    let configuration = SSETransportConfiguration(
+      sseURL: sseURL,
+      postURL: postURL,
+      sseHeaders: sseHeaders,
+      postHeaders: postHeaders,
+      baseConfiguration: baseConfiguration)
+    self.init(configuration: configuration)
   }
 
   // MARK: Public
 
   public private(set) var state = TransportState.disconnected
-  public private(set) var configuration: TransportConfiguration
+
+  public var configuration: TransportConfiguration {
+    _configuration.baseConfiguration
+  }
+
+  /// SSE endpoint URL
+  public var sseURL: URL { _configuration.sseURL }
+  /// Optional post URL, typically discovered from an SSE `endpoint` event
+  public var postURL: URL? { _configuration.postURL }
+
+  /// Headers attached to SSE endpoint requests
+  public var sseHeaders: [String: String] { _configuration.sseHeaders }
+  /// Headers attached to POST endpoint requests
+  public var postHeaders: [String: String] { _configuration.postHeaders }
 
   /// Provides a stream of inbound SSE messages as `Data`.
   /// This call does not start the transport if it's not already started. The caller must `start()` first if needed.
@@ -121,15 +200,9 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
       "\(operation) failed after \(maxAttempts) attempts: \(String(describing: lastError))")
   }
 
-  // MARK: Internal
-
-  /// Optional post URL, typically discovered from an SSE `endpoint` event
-  private(set) var postURL: URL?
-
   // MARK: Private
 
-  /// SSE endpoint URL
-  private let sseURL: URL
+  private var _configuration: SSETransportConfiguration
 
   /// Session used for SSE streaming and short-lived POST
   private let session: URLSession
@@ -168,7 +241,10 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     do {
       var request = URLRequest(url: endpoint)
       request.timeoutInterval = configuration.connectTimeout
-      request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+      for (k, v) in sseHeaders {
+        request.addValue(v, forHTTPHeaderField: k)
+      }
+      logger.error("NOAH: \(sseHeaders)")
 
       let (byteStream, response) = try await session.bytes(for: request)
       try validateHTTPResponse(response)
@@ -202,7 +278,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
           eventID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
         } else if line.hasPrefix("retry:") {
           if let ms = parseRetry(line) {
-            configuration.retryPolicy.baseDelay = TimeInterval(ms) / 1000.0
+            _configuration.baseConfiguration.retryPolicy.baseDelay = TimeInterval(ms) / 1000.0
           }
         } else {
           logger.debug("SSEClientTransport ignoring unknown line: \(line)")
@@ -270,7 +346,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     }
 
     logger.debug("SSEClientTransport discovered POST endpoint: \(newURL.absoluteString)")
-    postURL = newURL
+    _configuration.postURL = newURL
 
     // If someone was awaiting postURL, resume them
     postURLWaitContinuation?.resume(returning: newURL)
@@ -296,7 +372,10 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     request.httpMethod = "POST"
     request.timeoutInterval = timeout ?? configuration.sendTimeout
     request.httpBody = data
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    for (k, v) in postHeaders {
+      request.setValue(v, forHTTPHeaderField: k)
+    }
+    logger.error("NOAH request headers \(postHeaders)")
 
     let (_, response) = try await session.data(for: request)
     guard

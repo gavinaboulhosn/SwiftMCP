@@ -5,28 +5,56 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "WebSocketClientTra
 
 // MARK: - WebSocketClientTransport
 
+extension WebSocketTransportConfiguration {
+  public static let dummyData = WebSocketTransportConfiguration(
+    endpointURL: URL("ws://localhost:3000")!,
+    baseConfiguration: .dummyData)
+}
+
+/// Configuration for a Websocket client transport
+public struct WebSocketTransportConfiguration: Codable {
+
+  public var endpointURL: URL
+  // TODO: does cookie / auth storage need to be on here too?
+  public var baseConfiguration: TransportConfiguration
+
+  public init(
+    endpointURL: URL,
+    baseConfiguration: TransportConfiguration = .default)
+  {
+    self.endpointURL = endpointURL
+    self.baseConfiguration = baseConfiguration
+  }
+}
+
 public actor WebSocketClientTransport: MCPTransport {
 
   // MARK: Lifecycle
 
   // MARK: - Initialization
 
-  public init(url: URL, configuration: TransportConfiguration = .default) {
-    self.url = url
-    self.configuration = configuration
+  public init(configuration: WebSocketTransportConfiguration) {
+    _configuration = configuration
 
     delegate = WebSocketDelegate()
     session = URLSession(
       configuration: .ephemeral,
       delegate: delegate,
-      delegateQueue: nil
-    )
+      delegateQueue: nil)
+    // TODO: revisit auth settings
+    session.configuration.httpShouldSetCookies = true
+    session.configuration.httpCookieAcceptPolicy = .always
+    session.configuration.timeoutIntervalForRequest = configuration.baseConfiguration.requestTimeout
+    session.configuration.timeoutIntervalForResource = configuration.baseConfiguration.responseTimeout
+    session.configuration.waitsForConnectivity = configuration.baseConfiguration.connectTimeout > 0
 
+    /// TODO: Do we want to open / subscribe before calling start?
     delegate.onOpen = { [weak self] in
       Task { await self?.handleOpen() }
     }
 
     delegate.onClose = { [weak self] reason in
+      // TODO: cleanup / handle reconnect
       Task { await self?.handleError(TransportError.connectionFailed(reason)) }
     }
 
@@ -43,8 +71,11 @@ public actor WebSocketClientTransport: MCPTransport {
 
   // MARK: Public
 
-  public var configuration: TransportConfiguration
   public private(set) var state = TransportState.disconnected
+
+  public var configuration: TransportConfiguration {
+    _configuration.baseConfiguration
+  }
 
   // MARK: - Public Interface
 
@@ -68,7 +99,7 @@ public actor WebSocketClientTransport: MCPTransport {
     messageContinuation?.finish()
   }
 
-  public func send(_ data: Data, timeout: TimeInterval? = nil) async throws {
+  public func send(_ data: Data, timeout _: TimeInterval? = nil) async throws {
     guard state == .connected else {
       throw TransportError.invalidState("Not connected")
     }
@@ -85,9 +116,21 @@ public actor WebSocketClientTransport: MCPTransport {
     }
   }
 
+  // MARK: Internal
+
+  private(set) var url: URL {
+    get {
+      _configuration.endpointURL
+    }
+    set {
+      _configuration.endpointURL = newValue
+    }
+  }
+
   // MARK: Private
 
-  private let url: URL
+  private var _configuration: WebSocketTransportConfiguration
+
   private var webSocketTask: URLSessionWebSocketTask?
   private let session: URLSession
   private let delegate: WebSocketDelegate

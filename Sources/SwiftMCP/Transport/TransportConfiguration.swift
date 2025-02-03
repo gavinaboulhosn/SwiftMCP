@@ -2,8 +2,12 @@ import Foundation
 
 // MARK: - TransportConfiguration
 
+extension TransportConfiguration {
+  public static let dummyData = TransportConfiguration.default
+}
+
 /// Defines overall transport behavior and retry policies.
-public struct TransportConfiguration {
+public struct TransportConfiguration: Codable {
 
   // MARK: Lifecycle
 
@@ -11,7 +15,9 @@ public struct TransportConfiguration {
 
   /// - Parameters:
   /// - connectTimeout: Max time allowed to establish a connection
-  /// - sendTimeout: Max time allowed to send a message
+  /// - sendTimeout: Max time spent on the "send" operation
+  /// - requestTimeout: Max time spent by client for request
+  /// - responseTimeout: Max time given to server to respond
   /// - maxMessageSize: Limit in bytes for message size
   /// - retryPolicy: Policy for short-lived operation retries
   /// - healthCheckEnabled: Whether or not to run periodic health checks
@@ -20,6 +26,8 @@ public struct TransportConfiguration {
   public init(
     connectTimeout: TimeInterval = 120.0,
     sendTimeout: TimeInterval = 120.0,
+    requestTimeout: TimeInterval = 60.0,
+    responseTimeout: TimeInterval = 60.0,
     maxMessageSize: Int = 4_194_304, // 4 MB
     retryPolicy: TransportRetryPolicy = .default,
     healthCheckEnabled: Bool = true,
@@ -28,6 +36,8 @@ public struct TransportConfiguration {
   {
     self.connectTimeout = connectTimeout
     self.sendTimeout = sendTimeout
+    self.requestTimeout = requestTimeout
+    self.responseTimeout = responseTimeout
     self.maxMessageSize = maxMessageSize
     self.retryPolicy = retryPolicy
     self.healthCheckEnabled = healthCheckEnabled
@@ -43,6 +53,10 @@ public struct TransportConfiguration {
   public var connectTimeout: TimeInterval
   /// Maximum time to wait for sending data in seconds
   public var sendTimeout: TimeInterval
+  /// Timeout on client side before failing a request in seconds
+  public var requestTimeout: TimeInterval
+  /// Max time server is given to respond in seconds
+  public var responseTimeout: TimeInterval
   /// Maximum allowed message size in bytes
   public var maxMessageSize: Int
   /// Retry policy for short-lived operations
@@ -62,7 +76,7 @@ public struct TransportConfiguration {
 // MARK: - TransportRetryPolicy
 
 /// Policy for retrying short-lived operations (e.g. POST calls).
-public struct TransportRetryPolicy {
+public struct TransportRetryPolicy: Codable {
 
   // MARK: Lifecycle
 
@@ -84,11 +98,11 @@ public struct TransportRetryPolicy {
   // MARK: Public
 
   /// Types of backoff expansions for subsequent retries.
-  public enum BackoffPolicy {
+  public enum BackoffPolicy: Codable {
     case constant
     case exponential
     case linear
-    case custom((Int) -> TimeInterval)
+//    case custom((Int) -> TimeInterval)
 
     // MARK: Internal
 
@@ -101,8 +115,10 @@ public struct TransportRetryPolicy {
           baseDelay * pow(2.0, Double(attempt - 1))
         case .linear:
           baseDelay * Double(attempt)
-        case .custom(let calculator):
-          calculator(attempt)
+        @unknown default:
+          0
+//        case .custom(let calculator):
+//          calculator(attempt)
         }
       // Add optional jitter
       if jitter > 0 {
