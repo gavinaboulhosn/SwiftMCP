@@ -6,9 +6,11 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "WebSocketClientTra
 // MARK: - WebSocketClientTransport
 
 extension WebSocketTransportConfiguration {
-  public static let dummyData = WebSocketTransportConfiguration(
-    endpointURL: URL("ws://localhost:3000")!,
-    baseConfiguration: .dummyData)
+  public static let dummyData: WebSocketTransportConfiguration = {
+    try! WebSocketTransportConfiguration(
+      endpointURL: URL("ws://localhost:3000")!,
+      baseConfiguration: .dummyData)
+  }()
 }
 
 /// Configuration for a Websocket client transport
@@ -20,8 +22,13 @@ public struct WebSocketTransportConfiguration: Codable {
 
   public init(
     endpointURL: URL,
-    baseConfiguration: TransportConfiguration = .default)
-  {
+    baseConfiguration: TransportConfiguration = .default
+  ) throws {
+    guard let scheme = endpointURL.scheme?.lowercased(),
+          scheme == "ws" || scheme == "wss" else {
+      throw TransportError.invalidURLScheme(endpointURL.scheme ?? "none")
+    }
+    
     self.endpointURL = endpointURL
     self.baseConfiguration = baseConfiguration
   }

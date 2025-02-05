@@ -54,6 +54,8 @@ public enum TransportError: Error, LocalizedError {
   case messageTooLarge(Int)
   /// Transport type not supported on this platform
   case notSupported(String)
+  /// Invalid URL scheme for transport
+  case invalidURLScheme(String)
 
   // MARK: Public
 
@@ -73,6 +75,8 @@ public enum TransportError: Error, LocalizedError {
       "Message exceeds size limit: \(size)"
     case .notSupported(let detail):
       "Transport type not supported: \(detail)"
+    case .invalidURLScheme(let scheme):
+      "Invalid URL scheme for WebSocket transport: \(scheme). Must be 'ws' or 'wss'"
     }
   }
 }
