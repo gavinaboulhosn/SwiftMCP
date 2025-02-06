@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - NotificationFactory
+
 enum NotificationFactory {
   static func makeNotification(
     method: String,
@@ -70,7 +72,7 @@ enum NotificationFactory {
       }
 
     default:
-      return nil
+      return AnyMCPNotification(method: method, params: params)
     }
 
     return nil

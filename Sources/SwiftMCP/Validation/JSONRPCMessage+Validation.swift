@@ -55,7 +55,7 @@ extension JSONRPCMessage {
   }
 
   private func validateNotification(_ notification: any MCPNotification) throws {
-    guard !type(of: notification).method.isEmpty else {
+    guard !notification.method.isEmpty else {
       throw MCPError.invalidRequest("Method cannot be empty")
     }
   }

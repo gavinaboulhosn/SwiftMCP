@@ -200,8 +200,8 @@ extension MCPTransport {
 
   /// Sends a ping to the server
   func ping() async throws {
-   let requestId = UUID().uuidString
-   let message = JSONRPCMessage.request(id: .string(requestId), request: PingRequest())
-   let result = try await send(message)
+    let requestId = UUID().uuidString
+    let message = JSONRPCMessage.request(id: .string(requestId), request: PingRequest())
+    let result = try await send(message)
   }
 }

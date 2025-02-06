@@ -176,7 +176,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     state = .connecting
 
     let (ready, continuation) = AsyncStream.makeStream(of: Void.self)
-    self.connectedContinuation = continuation
+    connectedContinuation = continuation
 
     sseReadTask = Task<Void, Error> {
       try await withThrowingTaskGroup(of: Void.self) { group in

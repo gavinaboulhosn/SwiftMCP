@@ -81,7 +81,7 @@ public enum JSONRPCMessage: Codable {
       try container.encode(error, forKey: .error)
 
     case .notification(let notification):
-      try container.encode(type(of: notification).method, forKey: .method)
+      try container.encode(notification.method, forKey: .method)
       try container.encodeAny(notification.params, forKey: .params)
     }
   }

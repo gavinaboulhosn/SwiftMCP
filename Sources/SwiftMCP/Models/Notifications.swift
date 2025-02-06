@@ -44,6 +44,7 @@ extension MCPNotification {
 
 public struct CancelledNotification: MCPNotification {
   public static let method = "notifications/cancelled"
+  public var method: String { CancelledNotification.method }
 
   public struct Params: Codable, Sendable {
     public let requestId: RequestID
@@ -59,6 +60,7 @@ public struct CancelledNotification: MCPNotification {
 
 public struct InitializedNotification: MCPNotification {
   public static let method = "notifications/initialized"
+  public var method: String { InitializedNotification.method }
 
   public struct Params: Codable, Sendable {
     public let _meta: [String: AnyCodable]?
@@ -73,6 +75,7 @@ public struct InitializedNotification: MCPNotification {
 
 public struct ProgressNotification: MCPNotification {
   public static let method = "notifications/progress"
+  public var method: String { ProgressNotification.method }
 
   public struct Params: Codable, Sendable {
     public let progress: Double
@@ -92,6 +95,7 @@ public struct ProgressNotification: MCPNotification {
 
 public struct RootsListChangedNotification: MCPNotification {
   public static let method = "notifications/roots/list_changed"
+  public var method: String { RootsListChangedNotification.method }
 
   public struct Params: Codable, Sendable {
     public let _meta: [String: AnyCodable]?
@@ -106,6 +110,7 @@ public struct RootsListChangedNotification: MCPNotification {
 
 public struct ResourceListChangedNotification: MCPNotification {
   public static let method = "notifications/resources/list_changed"
+  public var method: String { ResourceListChangedNotification.method }
 
   public struct Params: Codable, Sendable {
     public let _meta: [String: AnyCodable]?
@@ -120,6 +125,7 @@ public struct ResourceListChangedNotification: MCPNotification {
 
 public struct ResourceUpdatedNotification: MCPNotification {
   public static let method = "notifications/resources/updated"
+  public var method: String { ResourceUpdatedNotification.method }
 
   public struct Params: Codable, Sendable {
     public let uri: String
@@ -134,6 +140,7 @@ public struct ResourceUpdatedNotification: MCPNotification {
 
 public struct PromptListChangedNotification: MCPNotification {
   public static let method = "notifications/prompts/list_changed"
+  public var method: String { PromptListChangedNotification.method }
 
   public struct Params: Codable, Sendable {
     public let _meta: [String: AnyCodable]?
@@ -148,6 +155,7 @@ public struct PromptListChangedNotification: MCPNotification {
 
 public struct ToolListChangedNotification: MCPNotification {
   public static let method = "notifications/tools/list_changed"
+  public var method: String { ToolListChangedNotification.method }
 
   public struct Params: Codable, Sendable {
     public let _meta: [String: AnyCodable]?
@@ -157,5 +165,36 @@ public struct ToolListChangedNotification: MCPNotification {
 
   public init(_meta: [String: AnyCodable]? = nil) {
     params = Params(_meta: _meta)
+  }
+}
+
+// MARK: - LoggingMessageNotification
+
+public struct LoggingMessageNotification: MCPNotification {
+  public static let method = "notifications/message"
+  public var method: String { LoggingMessageNotification.method }
+
+  public struct Params: Codable, Sendable {
+    public let data: AnyCodable
+    public let level: LoggingLevel
+    public let logger: String?
+  }
+
+  public var params: Params
+
+  public init(data: Any, level: LoggingLevel, logger: String? = nil) {
+    params = Params(data: AnyCodable(data), level: level, logger: logger)
+  }
+}
+
+// MARK: - AnyMCPNotification
+
+public struct AnyMCPNotification: MCPNotification {
+  public var method: String
+  public var params: [String: AnyCodable]?
+
+  public init(method: String, params: [String: AnyCodable]?) {
+    self.method = method
+    self.params = params
   }
 }

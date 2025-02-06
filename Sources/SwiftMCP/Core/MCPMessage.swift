@@ -75,7 +75,7 @@ public protocol MCPResponse: MCPMessage {
 public protocol MCPNotification: MCPMessage {
   associatedtype Params: Codable = EmptyParams
   /// The method name for this notification
-  static var method: String { get }
+  var method: String { get }
 
   /// The parameters for this notification, if any
   var params: Params { get }
