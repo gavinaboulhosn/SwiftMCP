@@ -117,9 +117,11 @@ public actor MCPClient: MCPEndpointProtocol {
 
     try await transport.start()
 
-    for try await ready in try await transport.stateMessages {
-      if ready == .connected {
-        break
+    if await transport.state != .connected {
+      for try await ready in try await transport.stateMessages {
+        if ready == .connected {
+          break
+        }
       }
     }
 
