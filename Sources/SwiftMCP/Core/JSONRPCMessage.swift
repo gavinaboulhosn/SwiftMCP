@@ -6,7 +6,7 @@ import Foundation
 ///
 /// It can be a request, response, error, or notification.
 /// Requests and responses are strongly typed thanks to generics.
-enum JSONRPCMessage: Codable {
+public enum JSONRPCMessage: Codable {
   /// A request message expecting a response.
   case request(id: RequestID, request: any MCPRequest)
 
@@ -21,7 +21,7 @@ enum JSONRPCMessage: Codable {
 
   // MARK: Lifecycle
 
-  init(from decoder: Decoder) throws {
+  public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
 
@@ -58,12 +58,9 @@ enum JSONRPCMessage: Codable {
     try validateVersion()
   }
 
-  // MARK: Internal
+  // MARK: Public
 
-  /// JSON-RPC version constant
-  var jsonrpcVersion: String { "2.0" }
-
-  func encode(to encoder: Encoder) throws {
+  public func encode(to encoder: Encoder) throws {
     try validateVersion()
 
     var container = encoder.container(keyedBy: CodingKeys.self)
@@ -88,6 +85,11 @@ enum JSONRPCMessage: Codable {
       try container.encodeAny(notification.params, forKey: .params)
     }
   }
+
+  // MARK: Internal
+
+  /// JSON-RPC version constant
+  var jsonrpcVersion: String { "2.0" }
 
   // MARK: Private
 

@@ -65,8 +65,6 @@ public actor StdioTransport: MCPTransport {
 
   // MARK: Public
 
-  public private(set) var state = TransportState.disconnected
-
   public var configuration: TransportConfiguration {
     _configuration.baseConfiguration
   }
@@ -75,38 +73,33 @@ public actor StdioTransport: MCPTransport {
     process?.isRunning ?? false
   }
 
-  public func messages() -> AsyncThrowingStream<Data, Error> {
-    AsyncThrowingStream { continuation in
-      self.messagesContinuation = continuation
+  public var messages: AsyncThrowingStream<JSONRPCMessage, Error> {
+    get throws {
+      let (stream, continuation) = AsyncThrowingStream.makeStream(of: JSONRPCMessage.self)
+      messagesContinuation = continuation
+      return stream
+    }
+  }
 
-      // Auto-start if needed
-      if self.state == .disconnected {
-        Task {
-          do {
-            try await self.start()
-          } catch {
-            continuation.finish(throwing: error)
-            return
-          }
-        }
-      }
+  public var stateMessages: AsyncStream<TransportState> {
+    get throws {
+      let (stream, continuation) = AsyncStream.makeStream(of: TransportState.self)
+      transportStateContinuation = continuation
+      return stream
+    }
+  }
 
-      // When the caller stops consuming the stream, we'll stop the transport.
-      continuation.onTermination = { @Sendable [weak self] _ in
-        Task {
-          await self?.stop()
-        }
-      }
+  public private(set) var state = TransportState.disconnected {
+    didSet {
+      transportStateContinuation?.yield(with: .success(state))
     }
   }
 
   public func start() async throws {
-    guard state == .disconnected else {
-      logger.warning("Transport already connected or connecting")
+    guard state != .connected else {
+      logger.warning("Transport already connected")
       return
     }
-
-    state = .connecting
 
     let inPipe = Pipe()
     let outPipe = Pipe()
@@ -195,22 +188,18 @@ public actor StdioTransport: MCPTransport {
     // Finish the message stream
     messagesContinuation?.finish()
     messagesContinuation = nil
+    transportStateContinuation?.finish()
+    transportStateContinuation = nil
   }
 
-  public func send(_ data: Data, timeout _: TimeInterval? = nil) async throws {
+  public func send(_ message: JSONRPCMessage, timeout _: TimeInterval? = nil) async throws {
     guard state == .connected else {
       throw TransportError.invalidState("Transport not connected")
     }
     guard let inPipe = inputPipe else {
       throw TransportError.invalidState("Pipe not available")
     }
-
-    // Check message size
-    guard data.count <= configuration.maxMessageSize else {
-      throw TransportError.messageTooLarge(data.count)
-    }
-
-    var messageData = data
+    var messageData = try validate(message)
     messageData.append(0x0A)
     inPipe.fileHandleForWriting.write(messageData)
   }
@@ -225,7 +214,8 @@ public actor StdioTransport: MCPTransport {
   private var outputPipe: Pipe?
   private var errorPipe: Pipe?
 
-  private var messagesContinuation: AsyncThrowingStream<Data, Error>.Continuation?
+  private var transportStateContinuation: AsyncStream<TransportState>.Continuation?
+  private var messagesContinuation: AsyncThrowingStream<JSONRPCMessage, Error>.Continuation?
   private var processTask: Task<Void, Never>?
 
   // Stored options for constructing the process each time
@@ -251,9 +241,16 @@ public actor StdioTransport: MCPTransport {
       for try await line in outPipe.bytes.lines {
         try Task.checkCancellation()
         guard let data = line.data(using: .utf8) else {
+          logger.error("Unable to parse line as UTF-8: \(line)")
           continue
         }
-        messagesContinuation?.yield(data)
+        if let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: data) {
+          guard let messagesContinuation else {
+            logger.error("Message received with nobody listening \(data)")
+            continue
+          }
+          messagesContinuation.yield(message)
+        }
       }
     } catch {
       logger.error("Error reading stdout messages: \(error)")
@@ -302,10 +299,8 @@ public actor StdioTransport: MCPTransport {
 
   // MARK: Lifecycle
 
-
-  public init(configuration: StdioTransportConfiguration = .dummyData)
-  {
-    self._configuration = configuration
+  public init(configuration: StdioTransportConfiguration = .dummyData) {
+    _configuration = configuration
   }
 
   public convenience init(
@@ -325,7 +320,6 @@ public actor StdioTransport: MCPTransport {
   // MARK: Public
 
   public private(set) var state = TransportState.disconnected
-  private var _configuration: StdioTransportConfiguration
 
   public var configuration: TransportConfiguration {
     _configuration.baseConfiguration
@@ -350,6 +344,11 @@ public actor StdioTransport: MCPTransport {
   public func send(_: Data, timeout _: TimeInterval? = nil) async throws {
     throw TransportError.unsupportedPlatform
   }
+
+  // MARK: Private
+
+  private var _configuration: StdioTransportConfiguration
+
 }
 
 #endif

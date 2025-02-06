@@ -17,11 +17,13 @@ extension WebSocketTransportConfiguration {
 public struct WebSocketTransportConfiguration: Codable {
 
   public var endpointURL: URL
+  public var protocols: [String]
   // TODO: does cookie / auth storage need to be on here too?
   public var baseConfiguration: TransportConfiguration
 
   public init(
     endpointURL: URL,
+    protocols: [String] = ["mcp"],
     baseConfiguration: TransportConfiguration = .default
   ) throws {
     guard let scheme = endpointURL.scheme?.lowercased(),
@@ -30,11 +32,12 @@ public struct WebSocketTransportConfiguration: Codable {
     }
     
     self.endpointURL = endpointURL
+    self.protocols = protocols
     self.baseConfiguration = baseConfiguration
   }
 }
 
-public actor WebSocketClientTransport: MCPTransport {
+public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
 
   // MARK: Lifecycle
 
@@ -47,6 +50,7 @@ public actor WebSocketClientTransport: MCPTransport {
     session = URLSession(
       configuration: .ephemeral,
       delegate: delegate,
+      // TODO: probably need queue to keep events synchronous
       delegateQueue: nil)
     // TODO: revisit auth settings
     session.configuration.httpShouldSetCookies = true
@@ -55,83 +59,73 @@ public actor WebSocketClientTransport: MCPTransport {
     session.configuration.timeoutIntervalForResource = configuration.baseConfiguration.responseTimeout
     session.configuration.waitsForConnectivity = configuration.baseConfiguration.connectTimeout > 0
 
-    /// TODO: Do we want to open / subscribe before calling start?
-    delegate.onOpen = { [weak self] in
-      Task { await self?.handleOpen() }
-    }
-
-    delegate.onClose = { [weak self] reason in
-      // TODO: cleanup / handle reconnect
-      Task { await self?.handleError(TransportError.connectionFailed(reason)) }
-    }
-
-    delegate.onError = { [weak self] error in
-      Task { await self?.handleError(error) }
-    }
+    delegate.onOpen = handleOpen
+    delegate.onClose = onClose
+    delegate.onError = handleError
   }
 
   deinit {
-    webSocketTask?.cancel(with: .goingAway, reason: nil)
-    connectContinuation?.resume(throwing: CancellationError())
-    messageContinuation?.finish()
+    cleanup(nil)
   }
 
   // MARK: Public
 
-  public private(set) var state = TransportState.disconnected
+  public private(set) var state = TransportState.disconnected {
+    didSet {
+      transportStateContinuation?.yield(state)
+    }
+  }
 
-  public var configuration: TransportConfiguration {
-    _configuration.baseConfiguration
+  public var configuration: TransportConfiguration { _configuration.baseConfiguration }
+
+  public var messages: AsyncThrowingStream<JSONRPCMessage, Error> {
+    get throws {
+      let (stream, continuation) = AsyncThrowingStream.makeStream(of: JSONRPCMessage.self)
+      messageContinuation = continuation
+      return stream
+    }
+  }
+
+  public var stateMessages: AsyncStream<TransportState> {
+    get throws {
+      let (stream, continuation) = AsyncStream.makeStream(of: TransportState.self)
+      transportStateContinuation = continuation
+      return stream
+    }
   }
 
   // MARK: - Public Interface
 
   public func start() async throws {
-    guard state != .connected else { return }
+    guard state != .connected else {
+      throw TransportError.invalidState("already connected, no need to start")
+    }
 
     state = .connecting
-    webSocketTask?.cancel()
-    webSocketTask = session.webSocketTask(with: url, protocols: ["mcp"])
+    webSocketTask = session.webSocketTask(with: url, protocols: _configuration.protocols)
     webSocketTask?.resume()
-
-    try await withCheckedThrowingContinuation { continuation in
-      connectContinuation = continuation
-    }
   }
 
   public func stop() {
     state = .disconnected
-    webSocketTask?.cancel(with: .normalClosure, reason: nil)
-    connectContinuation?.resume(throwing: CancellationError())
-    messageContinuation?.finish()
+    cleanup(nil)
   }
 
-  public func send(_ data: Data, timeout _: TimeInterval? = nil) async throws {
+  public func send(_ message: JSONRPCMessage, timeout _: TimeInterval? = nil) async throws {
     guard state == .connected else {
       throw TransportError.invalidState("Not connected")
     }
-
-    try await webSocketTask?.send(.data(data))
-  }
-
-  public func messages() -> AsyncThrowingStream<Data, Error> {
-    AsyncThrowingStream { continuation in
-      messageContinuation = continuation
-      continuation.onTermination = { [weak self] _ in
-        Task { await self?.stop() }
-      }
+    let data = try validate(message)
+    try await withRetry(operation: "WS SendMessage") {
+      try await self.webSocketTask?.send(.data(data))
     }
   }
 
   // MARK: Internal
 
   private(set) var url: URL {
-    get {
-      _configuration.endpointURL
-    }
-    set {
-      _configuration.endpointURL = newValue
-    }
+    get { _configuration.endpointURL }
+    set { _configuration.endpointURL = newValue }
   }
 
   // MARK: Private
@@ -142,53 +136,86 @@ public actor WebSocketClientTransport: MCPTransport {
   private let session: URLSession
   private let delegate: WebSocketDelegate
 
-  private var connectContinuation: CheckedContinuation<Void, Error>?
-  private var messageContinuation: AsyncThrowingStream<Data, Error>.Continuation?
+  private var messageReceiverTask: Task<Void, Error>?
+  private var messageContinuation: AsyncThrowingStream<JSONRPCMessage, Error>.Continuation?
+  private var transportStateContinuation: AsyncStream<TransportState>.Continuation?
+
+  // TODO: expand cancellation reason support
+  private func cleanup(_ error: Error?) {
+    messageReceiverTask?.cancel()
+    messageReceiverTask = nil
+    messageContinuation?.finish(throwing: error)
+    messageContinuation = nil
+    transportStateContinuation?.finish()
+    transportStateContinuation = nil
+    // TODO : revisit these exit codes
+    if let error {
+      webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
+    } else {
+      webSocketTask?.cancel(with: .normalClosure, reason: nil)
+    }
+  }
+
+  private func onClose(_ reason: String) {
+    handleError(TransportError.connectionFailed(reason))
+  }
 
   // MARK: - Private Handlers
 
   private func handleOpen() {
     state = .connected
-    connectContinuation?.resume()
-    connectContinuation = nil
     startMessageReceiver()
   }
 
+  /// Cleanups subscriptions and bubbles up error to all subscribers
   private func handleError(_ error: Error) {
     state = .failed(error)
-    connectContinuation?.resume(throwing: error)
-    connectContinuation = nil
-    messageContinuation?.finish(throwing: error)
+    cleanup(error)
   }
 
   private func startMessageReceiver() {
-    Task {
-      guard let webSocketTask = webSocketTask else { return }
+    if let messageReceiverTask {
+      logger.warning("message reciever task already running. ignoring this call")
+      return
+    }
 
-      do {
-        // not sure if this is really accurate, might want to use webSocketTask?.state
-        // most implementations just recursively call receive() in a defer
-        // defer { receive() }
-        while state == .connected {
-          let message = try await webSocketTask.receive()
-          try await handleMessage(message)
+    messageReceiverTask = Task {
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        group.addTask {
+          while true {
+            try Task.checkCancellation()
+            try await self.readLoop()
+          }
         }
-
-        logger.error("No longer handling messages")
-      } catch {
-        handleError(error)
+        group.addTask {
+          while true {
+            try Task.checkCancellation()
+            try await self.startHealthCheckTask()
+          }
+        }
+        try await group.next()
+        group.cancelAll()
       }
     }
+  }
+
+  private func readLoop() async throws {
+    guard let webSocketTask else {
+      throw TransportError.invalidState("No WebSocket Task")
+    }
+    let message = try await webSocketTask.receive()
+    try await handleMessage(message)
+    logger.error("No longer handling messages")
   }
 
   private func handleMessage(_ message: URLSessionWebSocketTask.Message) async throws {
     switch message {
     case .data(let data):
-      messageContinuation?.yield(data)
+      messageContinuation?.yield(try parse(data))
 
     case .string(let text):
       if let data = text.data(using: .utf8) {
-        messageContinuation?.yield(data)
+        messageContinuation?.yield(try parse(data))
       }
 
     @unknown default:

@@ -117,13 +117,17 @@ public actor MCPClient: MCPEndpointProtocol {
 
     try await transport.start()
 
-    // Begin reading from transport
-    let messageStream = await transport.messages()
+    for try await ready in try await transport.stateMessages {
+      if ready == .connected {
+        break
+      }
+    }
+
     messageTask = Task {
       do {
-        for try await data in messageStream {
+        for try await message in await try transport.messages {
           try Task.checkCancellation()
-          try await self.processIncomingMessage(data)
+          try await self.processIncomingMessage(message)
         }
       } catch {
         await handleError(error)
@@ -219,9 +223,7 @@ public actor MCPClient: MCPEndpointProtocol {
     guard case .running = state else {
       throw MCPError.internalError("Client must be running to send notifications")
     }
-    let msg = JSONRPCMessage.notification(notification)
-    let data = try JSONEncoder().encode(msg)
-    try await transport?.send(data)
+    try await transport?.send(.notification(notification))
   }
 
   /// Register a root structure for demonstration, if needed.
@@ -342,8 +344,7 @@ public actor MCPClient: MCPEndpointProtocol {
 
       Task {
         do {
-          let encoded = try JSONEncoder().encode(msg)
-          try await transport.send(encoded)
+          try await transport.send(msg)
         } catch {
           if let pen = pendingRequests.removeValue(forKey: requestId) {
             pen.cancel(with: error)
@@ -353,12 +354,7 @@ public actor MCPClient: MCPEndpointProtocol {
     }
   }
 
-  private func processIncomingMessage(_ data: Data) async throws {
-    guard let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: data) else {
-      logger.error("Failed to decode incoming data as JSONRPCMessage.")
-      return
-    }
-
+  private func processIncomingMessage(_ message: JSONRPCMessage) async throws {
     switch message {
     case .notification(let anyNotif):
       switch anyNotif {
@@ -405,22 +401,16 @@ public actor MCPClient: MCPEndpointProtocol {
     let method = type(of: inbound).method
     guard let handler = requestHandlers[method] else {
       let error = MCPError.methodNotFound(method)
-      let msg = JSONRPCMessage.error(id: id, error: error)
-      let decoded = try JSONEncoder().encode(msg)
-      try await transport?.send(decoded)
+      try await transport?.send(.error(id: id, error: error))
       return
     }
 
     do {
       let resp = try await handler(inbound)
-      let outMsg = JSONRPCMessage.response(id, response: resp)
-      let outData = try JSONEncoder().encode(outMsg)
-      try await transport?.send(outData)
+      try await transport?.send(.response(id, response: resp))
     } catch {
       let mcpe = error as? MCPError ?? MCPError.internalError(error.localizedDescription)
-      let outMsg = JSONRPCMessage.error(id: id, error: mcpe)
-      let outData = try JSONEncoder().encode(outMsg)
-      try await transport?.send(outData)
+      try await transport?.send(.error(id: id, error: mcpe))
     }
   }
 
@@ -457,9 +447,7 @@ public actor MCPClient: MCPEndpointProtocol {
     }
 
     let notification = InitializedNotification()
-    let msg = JSONRPCMessage.notification(notification)
-    let raw = try JSONEncoder().encode(msg)
-    try await transport.send(raw)
+    try await transport.send(.notification(notification))
 
     return initResp
   }

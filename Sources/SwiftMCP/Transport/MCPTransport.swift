@@ -7,12 +7,16 @@ import Foundation
 public protocol MCPTransport: Actor {
   /// The current state of the transport
   var state: TransportState { get }
-  /// Transport-level configuration
+
+  /// Current transport-level configuration
   var configuration: TransportConfiguration { get }
 
-  /// Provides a stream of raw `Data` messages.
+  /// A live stream of the current transport state
+  var stateMessages: AsyncStream<TransportState> { get throws }
+
+  /// Provides a stream of raw `JSONRPCMessage` messages.
   /// This is used by `MCPClient` to receive inbound messages.
-  func messages() -> AsyncThrowingStream<Data, Error>
+  var messages: AsyncThrowingStream<JSONRPCMessage, Error> { get throws }
 
   /// Start the transport, transitioning it from `.disconnected` to `.connecting` and eventually `.connected`.
   func start() async throws
@@ -21,22 +25,11 @@ public protocol MCPTransport: Actor {
   func stop()
 
   /// Send data across the transport, optionally with a custom timeout.
-  func send(_ data: Data, timeout: TimeInterval?) async throws
+  func send(_ data: JSONRPCMessage, timeout: TimeInterval?) async throws
+
 }
 
-/// Default `send(_ data:timeout:)` with an optional parameter.
-extension MCPTransport {
-  public func send(_ data: Data, timeout: TimeInterval? = nil) async throws {
-    if data.count > configuration.maxMessageSize {
-      throw TransportError.messageTooLarge(data.count)
-    }
-    let finalTimeout = timeout ?? configuration.sendTimeout
-    try await with(timeout: .microseconds(Int64(finalTimeout * 1_000_000))) { [weak self] in
-      guard let self else { return }
-      try await send(data, timeout: nil)
-    }
-  }
-}
+// MARK: - TransportError
 
 /// Common errors at the transport layer (outside the scope of `MCPError`).
 public enum TransportError: Error, LocalizedError {
@@ -81,6 +74,8 @@ public enum TransportError: Error, LocalizedError {
   }
 }
 
+// MARK: - TransportState
+
 /// Represents the high-level connection state of a transport.
 public enum TransportState {
   /// Transport is not connected
@@ -92,6 +87,8 @@ public enum TransportState {
   /// Transport has failed
   case failed(Error)
 }
+
+// MARK: CustomStringConvertible, CustomDebugStringConvertible
 
 /// Conformance for printing or debugging `TransportState`.
 extension TransportState: CustomStringConvertible, CustomDebugStringConvertible {
@@ -107,6 +104,8 @@ extension TransportState: CustomStringConvertible, CustomDebugStringConvertible 
   public var debugDescription: String { description }
 }
 
+// MARK: Equatable
+
 extension TransportState: Equatable {
   public static func ==(lhs: TransportState, rhs: TransportState) -> Bool {
     switch (lhs, rhs) {
@@ -120,6 +119,8 @@ extension TransportState: Equatable {
     }
   }
 }
+
+// MARK: - RetryableTransport
 
 /// A protocol for transports to optionally provide a `withRetry` API.
 public protocol RetryableTransport: MCPTransport {
@@ -152,5 +153,55 @@ extension RetryableTransport {
       }
     }
     throw TransportError.operationFailed("\(String(describing: lastError))")
+  }
+}
+
+extension MCPTransport {
+  /// Default `send(_ message:timeout:)` with an optional parameter.
+  public func send(_ message: JSONRPCMessage, timeout: TimeInterval? = nil) async throws {
+    try await send(message, timeout: timeout)
+  }
+
+  /// Validates messages before sending
+  public func validate(_ message: JSONRPCMessage) throws -> Data {
+    let bytes: Data
+    do {
+      bytes = try JSONEncoder().encode(message)
+    } catch {
+      throw TransportError.operationFailed("Failed to serialize message: \(error.localizedDescription)")
+    }
+    let messageSize = bytes.count
+    let maxMessageSize = configuration.maxMessageSize
+    if messageSize > maxMessageSize {
+      throw TransportError.messageTooLarge(messageSize)
+    }
+    return bytes
+  }
+
+  /// Parses message from data
+  public func parse(_ data: Data) throws -> JSONRPCMessage {
+    guard let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: data) else {
+      throw TransportError.invalidMessage("Unable to parse JSONRPCMessage from data: \(data)")
+    }
+    return message
+  }
+
+}
+
+extension MCPTransport {
+  func startHealthCheckTask() async throws {
+    guard state == .connected else {
+      // not connected, why are we pinging?!?!??!
+      return
+    }
+    try await ping()
+    try await Task.sleep(for: .seconds(configuration.healthCheckInterval))
+  }
+
+  /// Sends a ping to the server
+  func ping() async throws {
+   let requestId = UUID().uuidString
+   let message = JSONRPCMessage.request(id: .string(requestId), request: PingRequest())
+   let result = try await send(message)
   }
 }
