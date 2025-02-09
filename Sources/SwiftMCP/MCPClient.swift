@@ -153,7 +153,7 @@ public actor MCPClient: MCPEndpointProtocol {
   }
 
   /// Stop the client, cancelling tasks and clearing state.
-  public func stop() async {
+  public func stop(cancelPending: Bool = true) async {
     messageTask?.cancel()
     messageTask = nil
 
@@ -161,12 +161,13 @@ public actor MCPClient: MCPEndpointProtocol {
     monitoringTask = nil
     reconnectAttempts = 0
 
-    let stopErr = MCPError.internalError("Client stopped")
-    for request in pendingRequests.values {
-      request.cancel(with: stopErr)
+    if cancelPending {
+      let stopErr = MCPError.internalError("Client stopped")
+      for request in pendingRequests.values {
+        request.cancel(with: stopErr)
+      }
+      pendingRequests.removeAll()
     }
-    pendingRequests.removeAll()
-
     await transport?.stop()
     state = .disconnected
     logger.debug("MCPClient stopped.")
@@ -174,7 +175,6 @@ public actor MCPClient: MCPEndpointProtocol {
 
   /// Attempt to reconnect using the same transport.
   public func reconnect() async throws {
-    // Prevent overlapping reconnect attempts.
     guard !isReconnecting else {
       logger.warning("Reconnect already in progress; skipping duplicate attempt.")
       return
@@ -182,30 +182,37 @@ public actor MCPClient: MCPEndpointProtocol {
     isReconnecting = true
     defer { isReconnecting = false }
 
+    // Preserve pending requests for resending after reconnection.
+    let preservedRequests = pendingRequests
+
     if isConnected {
-      await stop()
+      // Stop without cancelling pending requests.
+      await stop(cancelPending: false)
     }
 
     guard let currentTransport = transport else {
       throw MCPError.internalError("No transport available to reconnect.")
     }
 
-    // Transition the client state.
     state = .connecting
 
-    // Ensure the current transport is completely stopped.
+    // Ensure the current transport is stopped.
     await currentTransport.stop()
     reconnectAttempts = 0
 
-    // Attempt to start the same transport (or use a factory to create a new one, if desired).
+    // Start the same transport.
     try await currentTransport.start()
 
-    // Wait until the underlying transport signals that it is connected.
+    // Wait until the transport signals that it is connected.
     do {
       for try await newState in try await currentTransport.stateMessages {
         if newState == .connected { break }
       }
     } catch {
+      logger.error(
+        "Reconnection failed waiting for transport readiness: \(error.localizedDescription)")
+      await currentTransport.stop()
+      state = .disconnected
       throw MCPError.internalError("Failed waiting for transport connection: \(error)")
     }
 
@@ -214,9 +221,20 @@ public actor MCPClient: MCPEndpointProtocol {
       let capabilities = try await performInitialization()
       state = .running(capabilities)
       logger.info("Reconnection succeeded; client is running.")
+      // Resend preserved pending requests.
+      for (requestId, pending) in preservedRequests {
+        do {
+          try await transport?.send(pending.message)
+          // (Optionally update timeout tasks if needed.)
+        } catch {
+          pending.cancel(with: error)
+          pendingRequests.removeValue(forKey: requestId)
+        }
+      }
     } catch {
       state = .failed(MCPError.internalError("Failed to initialize after reconnect: \(error)"))
-      logger.error("Failed to initialize after reconnect: \(error)")
+      logger.error("Failed to initialize after reconnect: \(error.localizedDescription)")
+      await stop()
       throw error
     }
   }
@@ -234,11 +252,13 @@ public actor MCPClient: MCPEndpointProtocol {
     progressHandler: ProgressHandler.UpdateHandler? = nil)
     async throws -> R.Response
   {
-    guard case .running(let sess) = state else {
+    guard isConnected else {
       throw MCPError.internalError("Client must be running to send requests")
     }
 
-    try validateCapabilities(sess.capabilities, for: request)
+    if case .running(let sess) = state {
+      try validateCapabilities(sess.capabilities, for: request)
+    }
     let response = try await sendRequest(request, progressHandler: progressHandler)
     logger.debug(
       "MCPClient sent request \(R.method) -> received response type \(String(describing: R.Response.self))")
@@ -314,6 +334,11 @@ public actor MCPClient: MCPEndpointProtocol {
   /// Perform a single health check by calling `ping()`.
   private func performHealthCheck(maxReconnect: Int) async {
     do {
+      guard state != .disconnected else {
+        logger.info("MCPClient is disconnected. Skipping health check.")
+        return
+      }
+
       try await ping()
       reconnectAttempts = 0
     } catch {
@@ -366,7 +391,8 @@ public actor MCPClient: MCPEndpointProtocol {
         }
       }
 
-      pendingRequests[requestId] = PendingRequest<R.Response>(
+      pendingRequests[requestId] = PendingRequest(
+        message: msg,
         continuation: continuation,
         timeoutTask: timeoutTask)
 
@@ -648,9 +674,11 @@ extension MCPClient {
     func complete(with response: any MCPResponse) throws
 
     var responseType: any MCPResponse.Type { get }
+    var message: JSONRPCMessage { get }
   }
 
   private struct PendingRequest<Response: MCPResponse>: PendingRequestProtocol {
+    let message: JSONRPCMessage
     let continuation: CheckedContinuation<Response, any Error>
     let timeoutTask: Task<Void, Never>?
 

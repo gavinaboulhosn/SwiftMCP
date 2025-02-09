@@ -12,20 +12,19 @@ public struct TransportConfiguration: Codable {
   // MARK: Lifecycle
 
   /// Initializes a transport configuration.
-
   /// - Parameters:
-  /// - connectTimeout: Max time allowed to establish a connection
-  /// - sendTimeout: Max time spent on the "send" operation
-  /// - requestTimeout: Max time spent by client for request
-  /// - responseTimeout: Max time given to server to respond
-  /// - maxMessageSize: Limit in bytes for message size
-  /// - retryPolicy: Policy for short-lived operation retries
-  /// - healthCheckEnabled: Whether or not to run periodic health checks
-  /// - healthCheckInterval: Interval in seconds between health checks
-  /// - maxReconnectAttempts: Max attempts to reconnect on health check failures
+  ///   - connectTimeout: Max time allowed to establish a connection
+  ///   - sendTimeout: Max time spent on the "send" operation
+  ///   - requestTimeout: Max time spent by client for request
+  ///   - responseTimeout: Max time given to server to respond
+  ///   - maxMessageSize: Limit in bytes for message size
+  ///   - retryPolicy: Policy for short-lived operation retries
+  ///   - healthCheckEnabled: Whether or not to run periodic health checks
+  ///   - healthCheckInterval: Interval in seconds between health checks
+  ///   - maxReconnectAttempts: Max attempts to reconnect on health check failures
   public init(
-    connectTimeout: TimeInterval = 120.0,
-    sendTimeout: TimeInterval = 120.0,
+    connectTimeout: TimeInterval = 30.0,
+    sendTimeout: TimeInterval = 30.0,
     requestTimeout: TimeInterval = 60.0,
     responseTimeout: TimeInterval = 60.0,
     maxMessageSize: Int = 4_194_304, // 4 MB
@@ -102,7 +101,7 @@ public struct TransportRetryPolicy: Codable {
     case constant
     case exponential
     case linear
-//    case custom((Int) -> TimeInterval)
+    //    case custom((Int) -> TimeInterval)
 
     // MARK: Internal
 
@@ -117,8 +116,8 @@ public struct TransportRetryPolicy: Codable {
           baseDelay * Double(attempt)
         @unknown default:
           0
-//        case .custom(let calculator):
-//          calculator(attempt)
+          //        case .custom(let calculator):
+          //          calculator(attempt)
         }
       // Add optional jitter
       if jitter > 0 {

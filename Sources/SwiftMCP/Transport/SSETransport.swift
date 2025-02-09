@@ -3,8 +3,6 @@ import OSLog
 
 private let logger = Logger(subsystem: "SwiftMCP", category: "SSEClientTransport")
 
-// MARK: - SSEClientTransport
-
 extension SSETransportConfiguration {
   public static let dummyData = SSETransportConfiguration(
     sseURL: URL(string: "http://localhost:3000")!,
@@ -46,7 +44,6 @@ public struct SSETransportConfiguration: Codable {
   public var postURL: URL?
   public var sseHeaders: [String: String]
   public var postHeaders: [String: String]
-  // TODO: does cookie / auth storage need to be on here too?
   public var baseConfiguration: TransportConfiguration
 
 }
@@ -55,26 +52,13 @@ extension TransportConfiguration {
   public static let defaultSSE = TransportConfiguration(healthCheckEnabled: true, healthCheckInterval: 5.0)
 }
 
-/// A concrete implementation of `MCPTransport` providing Server-Sent Events (SSE) support.
-///
-/// This transport uses:
-/// - An indefinite GET request to the SSE endpoint for receiving events.
-/// - A short-lived POST for sending data, using an endpoint typically announced by the server via an SSE `endpoint` event.
-/// It also supports retries via `RetryableTransport`.
 public actor SSEClientTransport: MCPTransport, RetryableTransport {
 
   // MARK: Lifecycle
 
-  /// Initialize an SSEClientTransport.
-  ///
-  /// - Parameters:
-  ///   - configuration: The SSE Transport Configuration object. Required.
-  public init(
-    configuration: SSETransportConfiguration)
-  {
+  public init(configuration: SSETransportConfiguration) {
     _configuration = configuration
     session = URLSession(configuration: .ephemeral)
-    // TODO: revisit auth settings
     session.configuration.httpShouldSetCookies = true
     session.configuration.httpCookieStorage = .shared
     session.configuration.httpCookieAcceptPolicy = .always
@@ -118,17 +102,12 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     _configuration.baseConfiguration
   }
 
-  /// SSE endpoint URL
   public var sseURL: URL { _configuration.sseURL }
-
-  /// Optional post URL, typically discovered from an SSE `endpoint` event.
-  /// When a new non‑nil URL is set, all waiting continuations are notified.
   public var postURL: URL? {
     get { _configuration.postURL }
     set {
       _configuration.postURL = newValue
       if let newURL = newValue {
-        // Notify all waiting continuations of the new URL.
         for continuation in postURLContinuations {
           continuation.yield(newURL)
           continuation.finish()
@@ -138,13 +117,9 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     }
   }
 
-  /// Headers attached to SSE endpoint requests
   public var sseHeaders: [String: String] { _configuration.sseHeaders }
-  /// Headers attached to POST endpoint requests
   public var postHeaders: [String: String] { _configuration.postHeaders }
 
-  /// Provides a stream of inbound SSE messages as `JSONRPCMessage`.
-  /// This call does not start the transport if it's not already started. The caller must `start()` first if needed.
   public var messages: AsyncThrowingStream<JSONRPCMessage, Error> {
     get throws {
       guard messageContinuation == nil else {
@@ -167,17 +142,14 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     }
   }
 
-  /// Starts the SSE connection by launching the read loop.
   public func start() async throws {
     guard state != .connected else {
       logger.warning("SSEClientTransport start called but already connected.")
-      throw TransportError.invalidState("we are already connected, no need to call start")
+      throw TransportError.invalidState("Already connected, no need to call start")
     }
     state = .connecting
-
     let (ready, continuation) = AsyncStream.makeStream(of: Void.self)
     connectedContinuation = continuation
-
     sseReadTask = Task<Void, Error> {
       try await withThrowingTaskGroup(of: Void.self) { group in
         group.addTask {
@@ -192,16 +164,13 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
             try await self.startHealthCheckTask()
           }
         }
-        // wait for the first task to complete and propagate any errors
         try await group.next()
         group.cancelAll()
       }
     }
-
     await ready
   }
 
-  /// Stops the SSE connection, finishing the message stream and canceling tasks.
   public func stop() {
     logger.debug("Stopping SSEClientTransport.")
     state = .disconnected
@@ -209,9 +178,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     logger.info("SSEClientTransport is now disconnected.")
   }
 
-  /// Sends data via a short-lived POST request.
-  /// - Parameter message: The message to send (e.g. JSON-encoded).
-  /// - Parameter timeout: Optional override for send timeout.
   public func send(_ message: JSONRPCMessage, timeout: TimeInterval? = nil) async throws {
     guard state == .connected else {
       throw TransportError.invalidState("Not connected")
@@ -228,9 +194,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     }
   }
 
-  // MARK: - RetryableTransport
-
-  /// Retry a block of code with the configured `TransportRetryPolicy`.
   public func withRetry<T>(
     operation: String,
     block: @escaping () async throws -> T)
@@ -239,37 +202,28 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     var attempt = 1
     let maxAttempts = configuration.retryPolicy.maxAttempts
     var lastError: Error?
-
     while attempt <= maxAttempts {
       do {
         return try await block()
       } catch {
         lastError = error
         guard attempt < maxAttempts else { break }
-
         let delay = configuration.retryPolicy.delay(forAttempt: attempt)
         logger.warning("\(operation) failed (attempt \(attempt)). Retrying in \(delay) seconds.")
         try await Task.sleep(for: .seconds(delay))
         attempt += 1
       }
     }
-    throw TransportError.operationFailed(
-      "\(operation) failed after \(maxAttempts) attempts: \(String(describing: lastError))")
+    throw TransportError.operationFailed("\(operation) failed after \(maxAttempts) attempts: \(String(describing: lastError))")
   }
 
   // MARK: Private
 
   private var _configuration: SSETransportConfiguration
-
-  /// Session used for SSE streaming and short-lived POST
   private let session: URLSession
-  /// Task that runs the indefinite SSE read loop
   private var sseReadTask: Task<Void, Error>?
-  /// Continuation used by `messages()` for inbound SSE messages
   private var messageContinuation: AsyncThrowingStream<JSONRPCMessage, Error>.Continuation?
-  /// Message listeners
   private var transportStateContinuation: AsyncStream<TransportState>.Continuation?
-  /// Holds all continuations waiting for a POST URL to be resolved.
   private var postURLContinuations: [AsyncStream<URL>.Continuation] = []
   private var connectedContinuation: AsyncStream<Void>.Continuation?
 
@@ -282,62 +236,43 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     connectedContinuation = nil
     transportStateContinuation?.finish()
     transportStateContinuation = nil
-
-    // Finish and remove all waiting POST URL continuations.
     for continuation in postURLContinuations {
       continuation.finish()
     }
     postURLContinuations.removeAll()
   }
 
-  // MARK: - SSE Read Loop
-
-  /// Main SSE read loop, reading lines from the SSE endpoint and yielding them as needed.
   private func readLoop() async throws {
-    // Extract the endpoint URL once
     let endpoint = sseURL
     do {
       var request = URLRequest(url: endpoint)
-      // Extract timeout locally for logging/assignment
-      let connectTimeout = configuration.connectTimeout
-      request.timeoutInterval = connectTimeout
-
-      // Set default SSE headers
+      request.timeoutInterval = configuration.connectTimeout
       for (key, value) in SSETransportConfiguration.defaultSSEHeaders {
         logger.info("Setting default SSE header: \(key): \(value)")
         request.setValue(value, forHTTPHeaderField: key)
       }
-      // Set custom SSE headers
       for (key, value) in sseHeaders {
         logger.info("Setting SSE header: \(key): \(value)")
         request.addValue(value, forHTTPHeaderField: key)
       }
-      // Log all headers (using local copy to avoid capturing self)
       if let headers = request.allHTTPHeaderFields {
         for (key, value) in headers {
           logger.info("Final header: \(key): \(value ?? "nil")")
         }
       }
-
-      // Start the SSE connection
       let (byteStream, response) = try await session.bytes(for: request)
       try validateHTTPResponse(response)
-
-      // Successfully connected: update state and signal readiness
       state = .connected
       connectedContinuation?.yield()
       connectedContinuation?.finish()
 
-      // Accumulate incoming bytes into SSE events
       var dataBuffer = Data()
       var eventType = "message"
       var eventID: String?
 
       for try await line in byteStream.allLines {
         try Task.checkCancellation()
-
         if line.isEmpty {
-          // End of an SSE event: process it and then reset the event context
           try await handleSSEEvent(type: eventType, id: eventID, data: dataBuffer)
           dataBuffer.removeAll()
           eventType = "message"
@@ -363,53 +298,43 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
         }
       }
 
-      // If there is leftover data in the buffer, handle it as an event.
       if !dataBuffer.isEmpty {
         try await handleSSEEvent(type: eventType, id: eventID, data: dataBuffer)
       }
 
-      // For short-lived SSE endpoints (such as Lambda-backed servers) a graceful end
-      // is a signal that the connection is done before initialization completes.
       logger.debug("SSE stream ended gracefully for URL \(endpoint.absoluteString)")
-      // Trigger cleanup and force a reconnection rather than waiting for a timeout.
       cleanup(nil)
       throw TransportError.connectionFailed("SSE stream ended gracefully, triggering reconnection.")
 
     } catch is CancellationError {
       logger.debug("SSE read loop cancelled for URL \(endpoint.absoluteString)")
-      // Cancellation is expected; do not update state here.
     } catch {
-      // Extract the URL string for logging
       let urlString = endpoint.absoluteString
-
-      // Check if the error is an NSError so we can inspect its domain and code.
       if let nsError = error as NSError? {
-        logger.error("Error in SSE read loop for URL \(urlString): Domain=\(nsError.domain) Code=\(nsError.code) \(nsError.localizedDescription)")
-
-        // For example, if the error indicates the connection was lost or timed out:
-        if nsError.domain == NSURLErrorDomain &&
-            (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorNetworkConnectionLost) {
-          // For these error types, we want to trigger reconnection immediately.
-          state = .failed(error)
+        logger
+          .error(
+            "Error in SSE read loop for URL \(urlString): Domain=\(nsError.domain) Code=\(nsError.code) \(nsError.localizedDescription)")
+        if
+          nsError.domain == NSURLErrorDomain &&
+          (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorNetworkConnectionLost)
+        {
+          state = .disconnected
           cleanup(error)
           throw TransportError.connectionFailed("SSE connection lost or timed out, triggering immediate reconnection.")
         } else {
-          // For any other error, we might choose to log and propagate the error normally.
-          state = .failed(error)
+          state = .disconnected
           cleanup(error)
           throw error
         }
       } else {
-        // Fallback in case the error isn't an NSError
         logger.error("Fatal error in SSE read loop for URL \(urlString): \(error.localizedDescription)")
-        state = .failed(error)
+        state = .disconnected
         cleanup(error)
         throw error
       }
     }
   }
 
-  /// Parse and handle a single SSE event upon encountering a blank line.
   private func handleSSEEvent(type: String, id: String?, data: Data) async throws {
     logger.debug("SSE event id=\(id ?? ""), type=\(type), data=\(data).")
     guard data.count > 0 else {
@@ -423,7 +348,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
       try handleMessage(data)
     default:
       logger.warning("UNHANDLED EVENT TYPE: \(type)")
-      break
     }
   }
 
@@ -432,51 +356,40 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     guard let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: data) else {
       throw TransportError.invalidMessage("Unable to parse JSONRPCMessage \(data)")
     }
-    // TODO: add intercept for ping messages maybe?
     messageContinuation?.yield(message)
   }
 
-  /// Validate that the SSE endpoint returned a successful 200 OK response.
   private func validateHTTPResponse(_ response: URLResponse) throws {
     guard
       let httpResp = response as? HTTPURLResponse,
       (200...299).contains(httpResp.statusCode)
-    // TODO: validate "ok"
     else {
-      // TODO: bubble up actual error
       throw TransportError.operationFailed("SSE request did not return HTTP 2XX.")
     }
   }
 
-  /// If an SSE `endpoint` event is received, parse it as a new POST URL.
   private func handleEndpointEvent(_ data: Data) throws {
     guard
-      let text = String(data: data, encoding: .utf8)?.trimmingCharacters(
-        in: .whitespacesAndNewlines),
+      let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
       !text.isEmpty
     else {
       throw TransportError.invalidMessage("Empty or invalid 'endpoint' SSE event.")
     }
-
     guard
       let baseURL = URL(string: "/", relativeTo: sseURL)?.baseURL,
       let newURL = URL(string: text, relativeTo: baseURL)
     else {
       throw TransportError.invalidMessage("Could not form absolute endpoint from: \(text)")
     }
-
     logger.debug("SSEClientTransport discovered POST endpoint: \(newURL.absoluteString)")
     postURL = newURL
   }
 
-  /// Parse "retry: xyz" line, returning xyz as Int (milliseconds).
   private func parseRetry(_ line: String) -> Int? {
     let raw = line.dropFirst("retry:".count).trimmingCharacters(in: .whitespaces)
     return Int(raw)
   }
 
-  // MARK: - POST Send
-  /// Perform a short-lived POST request to send data.
   private func post(
     _ message: JSONRPCMessage,
     to url: URL,
@@ -496,18 +409,14 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
       logger.info("setting \(k): \(v)")
       request.setValue(v, forHTTPHeaderField: k)
     }
-
     logger.info("POST request: \(String(data: messageData, encoding: .utf8)!)")
     request.allHTTPHeaderFields?.forEach { key, value in
       logger.info("header: \(key): \(value ?? "nil")")
     }
-
     let (data, response) = try await session.data(for: request)
-
     guard let httpResponse = response as? HTTPURLResponse else {
       throw TransportError.operationFailed("Invalid response type received")
     }
-
     if let responseString = String(data: data, encoding: .utf8) {
       logger.debug("Response data: \(responseString)")
     } else {
@@ -515,40 +424,30 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     }
     try validateHTTPResponse(httpResponse)
     logger.debug("SSEClientTransport POST send succeeded to \(url.absoluteString) with status code \(httpResponse.statusCode)")
-    // Don't care about the result for now.
   }
 
-  /// If postURL is not yet known, await it until the SSE server provides it or we time out.
   private func resolvePostURL(timeout: TimeInterval = 5) async throws -> URL {
-    if let existing = postURL {
-      return existing
-    }
+    if let existing = postURL { return existing }
     let (stream, continuation) = AsyncStream.makeStream(of: URL.self)
     postURLContinuations.append(continuation)
     return try await withThrowingTimeout(seconds: timeout) {
-      for try await url in stream {
-        return url
-      }
+      for try await url in stream { return url }
       throw TransportError.invalidState("URL never resolved")
     }
   }
 }
 
-/// Extends `AsyncSequence` of bytes to produce lines for SSE processing.
 extension AsyncSequence where Element == UInt8 {
-  /// Splits an async byte stream into lines delimited by `\n`.
   var allLines: AsyncThrowingStream<String, Error> {
     AsyncThrowingStream { continuation in
       Task {
         var buffer: [UInt8] = []
         var iterator = self.makeAsyncIterator()
-
         do {
           while let byte = try await iterator.next() {
             if byte == UInt8(ascii: "\n") {
-              // End of line.
               if buffer.isEmpty {
-                continuation.yield("") // blank line.
+                continuation.yield("")
               } else {
                 if let line = String(data: Data(buffer), encoding: .utf8) {
                   continuation.yield(line)
@@ -561,11 +460,8 @@ extension AsyncSequence where Element == UInt8 {
               buffer.append(byte)
             }
           }
-          // End of stream, flush partial.
-          if !buffer.isEmpty {
-            if let line = String(data: Data(buffer), encoding: .utf8) {
-              continuation.yield(line)
-            }
+          if !buffer.isEmpty, let line = String(data: Data(buffer), encoding: .utf8) {
+            continuation.yield(line)
           }
           continuation.finish()
         } catch {

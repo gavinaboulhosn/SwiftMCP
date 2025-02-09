@@ -91,7 +91,9 @@ public actor StdioTransport: MCPTransport, RetryableTransport {
 
   public private(set) var state = TransportState.disconnected {
     didSet {
-      transportStateContinuation?.yield(with: .success(state))
+      let newState = state
+      logger.info("client state update: \(oldValue) -> \(newState)")
+      transportStateContinuation?.yield(with: .success(newState))
     }
   }
 
@@ -238,7 +240,6 @@ public actor StdioTransport: MCPTransport, RetryableTransport {
 
   private func readMessages(_ outPipe: Pipe) async {
     do {
-      // Process each line from the stdout byte stream.
       for try await line in outPipe.bytes.lines {
         try Task.checkCancellation()
         guard let data = line.data(using: .utf8) else {
@@ -253,17 +254,13 @@ public actor StdioTransport: MCPTransport, RetryableTransport {
           continuation.yield(message)
         }
       }
-      // The stdout stream ended normally.
       logger.debug("Stdout stream ended gracefully.")
-      // Ensure a full cleanup by awaiting stop() (which updates state and finishes continuations).
       await stop()
     } catch is CancellationError {
       logger.debug("Stdout read task cancelled.")
     } catch {
-      // Log the error with its localized description.
       logger.error("Fatal error in reading stdout messages: \(error.localizedDescription)")
-      // Update state to failed and trigger cleanup.
-      state = .failed(error)
+      state = .disconnected
       await stop()
     }
   }

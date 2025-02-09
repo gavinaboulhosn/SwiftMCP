@@ -357,24 +357,27 @@ public enum ConnectionStatus: Equatable, Sendable {
   case disconnected
   case failed(Error)
 
-  public static func ==(lhs: ConnectionStatus, rhs: ConnectionStatus) -> Bool {
-    switch (lhs, rhs) {
-      case (.connected, .connected),
-        (.connecting, .connecting),
-        (.disconnected, .disconnected),
-        (.failed, .failed):
-        true
-      default:
-        false
-    }
-  }
+  // MARK: Public
 
   public var hasError: Bool {
     switch self {
-      case .failed:
-        return true
-      default:
-        return false
+    case .failed:
+      return true
+    default:
+      return false
     }
   }
+
+  public static func ==(lhs: ConnectionStatus, rhs: ConnectionStatus) -> Bool {
+    switch (lhs, rhs) {
+    case (.connected, .connected),
+         (.connecting, .connecting),
+         (.disconnected, .disconnected),
+         (.failed, .failed):
+      true
+    default:
+      false
+    }
+  }
+
 }

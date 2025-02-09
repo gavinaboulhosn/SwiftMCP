@@ -16,7 +16,7 @@ public protocol MCPEndpointProtocol: Actor {
   func start(_ transport: MCPTransport) async throws
 
   /// Stop the endpoint
-  func stop() async
+  func stop(cancelPending: Bool) async
 
   /// Send a request and await response
   func send<R: MCPRequest>(_ request: R) async throws -> R.Response

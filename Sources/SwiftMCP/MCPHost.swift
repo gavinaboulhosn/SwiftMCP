@@ -59,18 +59,12 @@ public actor MCPHost {
   ///           or other errors if the client fails to start.
   /// - Returns: The newly created `ConnectionState`.
   @discardableResult
-  public func connect(
-    _ id: String,
-    transport: MCPTransport)
-    async throws -> ConnectionState
-  {
+  public func connect(_ id: String, transport: MCPTransport) async throws -> ConnectionState {
     if connections[id] != nil {
       throw MCPHostError.connectionExists(id)
     }
 
     let client = MCPClient(configuration: configuration.clientConfig)
-
-    // If there's some special "sampling" handler
     if let sampling = configuration.sampling {
       await client.registerHandler(for: CreateMessageRequest.self) { request in
         try await sampling.handler(request)
@@ -89,25 +83,27 @@ public actor MCPHost {
       serverInfo: sessInfo.serverInfo,
       capabilities: sessInfo.capabilities)
 
-    // Listen to the client's notifications
+    // Spawn a task to listen to client notifications.
     let notifTask = Task { [weak self, weak connection] in
-      guard let self, let connection else { return }
+      guard let self = self, let connection = connection else { return }
       for await note in client.notifications {
-        await handleNotification(note, for: connection)
+        await self.handleNotification(note, for: connection)
+        await Task.yield() // yield to allow other actor messages to run
       }
     }
-
     connections[id] = connection
     notificationTasks[id] = notifTask
 
+    // Immediately yield a connection-added event.
     yieldHostEvent(.connectionAdded(connection))
 
-    // Also watch for status changes from the connection itself
+    // Spawn a detached task to forward connection status events.
     let connEventStream = connection.events()
     Task.detached { [weak self, weak connection] in
-      guard let self, let connection else { return }
+      guard let self = self, let connection = connection else { return }
       for await _ in connEventStream {
-        await yieldHostEvent(.connectionStatusChanged(connection))
+        await self.yieldHostEvent(.connectionStatusChanged(connection))
+        await Task.yield()
       }
     }
 

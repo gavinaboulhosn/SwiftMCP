@@ -6,18 +6,16 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "WebSocketClientTra
 // MARK: - WebSocketClientTransport
 
 extension WebSocketTransportConfiguration {
-  public static let dummyData: WebSocketTransportConfiguration = try! WebSocketTransportConfiguration(
-    endpointURL: URL("ws://localhost:3000")!,
-    baseConfiguration: .dummyData)
+  public static let dummyData: WebSocketTransportConfiguration =
+    try! WebSocketTransportConfiguration(
+      endpointURL: URL("ws://localhost:3000")!,
+      baseConfiguration: .dummyData)
 }
 
 /// Configuration for a Websocket client transport
 public struct WebSocketTransportConfiguration: Codable {
 
-  public var endpointURL: URL
-  public var protocols: [String]
-  // TODO: does cookie / auth storage need to be on here too?
-  public var baseConfiguration: TransportConfiguration
+  // MARK: Lifecycle
 
   public init(
     endpointURL: URL,
@@ -36,6 +34,14 @@ public struct WebSocketTransportConfiguration: Codable {
     self.protocols = protocols
     self.baseConfiguration = baseConfiguration
   }
+
+  // MARK: Public
+
+  public var endpointURL: URL
+  public var protocols: [String]
+  // TODO: does cookie / auth storage need to be on here too?
+  public var baseConfiguration: TransportConfiguration
+
 }
 
 public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
@@ -57,7 +63,8 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
     session.configuration.httpShouldSetCookies = true
     session.configuration.httpCookieAcceptPolicy = .always
     session.configuration.timeoutIntervalForRequest = configuration.baseConfiguration.requestTimeout
-    session.configuration.timeoutIntervalForResource = configuration.baseConfiguration.responseTimeout
+    session.configuration.timeoutIntervalForResource =
+      configuration.baseConfiguration.responseTimeout
     session.configuration.waitsForConnectivity = configuration.baseConfiguration.connectTimeout > 0
 
     delegate.onOpen = handleOpen
@@ -73,7 +80,9 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
 
   public private(set) var state = TransportState.disconnected {
     didSet {
-      transportStateContinuation?.yield(state)
+      let newState = state
+      logger.info("client state update: \(oldValue) -> \(newState)")
+      transportStateContinuation?.yield(with: .success(newState))
     }
   }
 
@@ -155,10 +164,14 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
     } else {
       webSocketTask?.cancel(with: .normalClosure, reason: nil)
     }
+    webSocketTask = nil
   }
 
   private func onClose(_ reason: String) {
-    handleError(TransportError.connectionFailed(reason))
+    logger.info("WebSocket closed with reason: \(reason). Transitioning to disconnected.")
+    let err = TransportError.connectionFailed(reason)
+    state = .disconnected
+    cleanup(err)
   }
 
   // MARK: - Private Handlers
@@ -170,7 +183,9 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
 
   /// Cleanups subscriptions and bubbles up error to all subscribers
   private func handleError(_ error: Error) {
-    state = .failed(error)
+    logger.error(
+      "WebSocket encountered error: \(error.localizedDescription). Transitioning to disconnected.")
+    state = .disconnected
     cleanup(error)
   }
 
@@ -197,45 +212,26 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
       } catch is CancellationError {
         logger.debug("WebSocket message receiver cancelled for URL: \(endpointURL)")
       } catch {
-        logger.error("Fatal error in WebSocket read loop for URL \(endpointURL): \(error.localizedDescription)")
-        // Update state to failed.
-        state = .failed(error)
+        logger.error(
+          "Fatal error in WebSocket read loop for URL \(endpointURL): \(error.localizedDescription)")
+        state = .disconnected
         cleanup(error)
       }
     }
   }
 
-  private func readLoop() async throws {
-    guard let webSocketTask else {
-      throw TransportError.invalidState("No WebSocket Task")
-    }
-    do {
-      while true {
-        try Task.checkCancellation()
-        let message = try await webSocketTask.receive()
-        try await handleMessage(message)
-      }
-    } catch is CancellationError {
-      logger.debug("WebSocket read loop task cancelled.")
-      cleanup(nil)
-      throw CancellationError()
-    } catch {
-      logger.error("WebSocket read loop encountered error: \(error)")
-      cleanup(error)
-      throw error
-    }
-  }
-
   private func handleMessage(_ message: URLSessionWebSocketTask.Message) async throws {
     switch message {
-      case .data(let data):
+    case .data(let data):
+      messageContinuation?.yield(try parse(data))
+
+    case .string(let text):
+      if let data = text.data(using: .utf8) {
         messageContinuation?.yield(try parse(data))
-      case .string(let text):
-        if let data = text.data(using: .utf8) {
-          messageContinuation?.yield(try parse(data))
-        }
-      @unknown default:
-        logger.warning("Received unknown WebSocket message type")
+      }
+
+    @unknown default:
+      logger.warning("Received unknown WebSocket message type")
     }
   }
 }
