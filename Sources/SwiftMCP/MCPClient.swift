@@ -174,25 +174,50 @@ public actor MCPClient: MCPEndpointProtocol {
 
   /// Attempt to reconnect using the same transport.
   public func reconnect() async throws {
+    // Prevent overlapping reconnect attempts.
+    guard !isReconnecting else {
+      logger.warning("Reconnect already in progress; skipping duplicate attempt.")
+      return
+    }
+    isReconnecting = true
+    defer { isReconnecting = false }
+
     if isConnected {
       await stop()
     }
-    guard let transport else {
+
+    guard let currentTransport = transport else {
       throw MCPError.internalError("No transport available to reconnect.")
     }
 
+    // Transition the client state.
     state = .connecting
-    await transport.stop()
+
+    // Ensure the current transport is completely stopped.
+    await currentTransport.stop()
     reconnectAttempts = 0
 
-    try await transport.start()
+    // Attempt to start the same transport (or use a factory to create a new one, if desired).
+    try await currentTransport.start()
+
+    // Wait until the underlying transport signals that it is connected.
+    do {
+      for try await newState in try await currentTransport.stateMessages {
+        if newState == .connected { break }
+      }
+    } catch {
+      throw MCPError.internalError("Failed waiting for transport connection: \(error)")
+    }
+
+    // Proceed with initialization.
     do {
       let capabilities = try await performInitialization()
       state = .running(capabilities)
+      logger.info("Reconnection succeeded; client is running.")
     } catch {
-      let msg = "Failed to initialize after reconnect: \(error)"
-      state = .failed(MCPError.internalError(msg))
-      logger.error("\(msg)")
+      state = .failed(MCPError.internalError("Failed to initialize after reconnect: \(error)"))
+      logger.error("Failed to initialize after reconnect: \(error)")
+      throw error
     }
   }
 
@@ -251,6 +276,7 @@ public actor MCPClient: MCPEndpointProtocol {
   private var monitoringTask: Task<Void, Never>?
   /// Count of reconnection attempts
   private var reconnectAttempts = 0
+  private var isReconnecting = false
 
   private var transport: (any MCPTransport)?
   private let clientInfo: Implementation

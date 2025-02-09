@@ -294,32 +294,41 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
 
   /// Main SSE read loop, reading lines from the SSE endpoint and yielding them as needed.
   private func readLoop() async throws {
+    // Extract the endpoint URL once
     let endpoint = sseURL
     do {
       var request = URLRequest(url: endpoint)
-      request.timeoutInterval = configuration.connectTimeout
-      for (k, v) in SSETransportConfiguration.defaultSSEHeaders {
-        logger.info("setting \(k): \(v)")
-        request.setValue(v, forHTTPHeaderField: k)
+      // Extract timeout locally for logging/assignment
+      let connectTimeout = configuration.connectTimeout
+      request.timeoutInterval = connectTimeout
+
+      // Set default SSE headers
+      for (key, value) in SSETransportConfiguration.defaultSSEHeaders {
+        logger.info("Setting default SSE header: \(key): \(value)")
+        request.setValue(value, forHTTPHeaderField: key)
       }
-      for (k, v) in sseHeaders {
-        logger.info("setting \(k): \(v)")
-        request.addValue(v, forHTTPHeaderField: k)
+      // Set custom SSE headers
+      for (key, value) in sseHeaders {
+        logger.info("Setting SSE header: \(key): \(value)")
+        request.addValue(value, forHTTPHeaderField: key)
+      }
+      // Log all headers (using local copy to avoid capturing self)
+      if let headers = request.allHTTPHeaderFields {
+        for (key, value) in headers {
+          logger.info("Final header: \(key): \(value ?? "nil")")
+        }
       }
 
-      request.allHTTPHeaderFields?.forEach { key, value in
-        logger.info("header: \(key): \(value ?? "nil")")
-      }
-
+      // Start the SSE connection
       let (byteStream, response) = try await session.bytes(for: request)
       try validateHTTPResponse(response)
 
-      // We have a good response!
+      // Successfully connected: update state and signal readiness
       state = .connected
       connectedContinuation?.yield()
       connectedContinuation?.finish()
 
-      // Accumulate lines into SSE events
+      // Accumulate incoming bytes into SSE events
       var dataBuffer = Data()
       var eventType = "message"
       var eventID: String?
@@ -328,7 +337,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
         try Task.checkCancellation()
 
         if line.isEmpty {
-          // End of an SSE event
+          // End of an SSE event: process it and then reset the event context
           try await handleSSEEvent(type: eventType, id: eventID, data: dataBuffer)
           dataBuffer.removeAll()
           eventType = "message"
@@ -346,36 +355,57 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
           eventID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
         } else if line.hasPrefix("retry:") {
           if let ms = parseRetry(line) {
-            logger.debug("SSEClientTransport new retry policy in ms: \(ms)")
+            logger.debug("Updating retry policy delay to \(ms) ms")
             _configuration.baseConfiguration.retryPolicy.baseDelay = TimeInterval(ms) / 1000.0
           }
         } else {
-          logger.debug("SSEClientTransport ignoring unknown line: \(line)")
+          logger.debug("Ignoring unknown SSE line: \(line)")
         }
       }
 
-      // If there's leftover data in the buffer, handle it.
+      // If there is leftover data in the buffer, handle it as an event.
       if !dataBuffer.isEmpty {
         try await handleSSEEvent(type: eventType, id: eventID, data: dataBuffer)
       }
-      logger.debug("SSE stream ended gracefully.")
-      // Don't change to disconnected status, we are going to try to reconnect.
-      return
+
+      // For short-lived SSE endpoints (such as Lambda-backed servers) a graceful end
+      // is a signal that the connection is done before initialization completes.
+      logger.debug("SSE stream ended gracefully for URL \(endpoint.absoluteString)")
+      // Trigger cleanup and force a reconnection rather than waiting for a timeout.
+      cleanup(nil)
+      throw TransportError.connectionFailed("SSE stream ended gracefully, triggering reconnection.")
+
     } catch is CancellationError {
-      logger.debug("SSE read loop task cancelled.")
-      // Don't change to disconnected status, we are going to try to reconnect.
-      return
+      logger.debug("SSE read loop cancelled for URL \(endpoint.absoluteString)")
+      // Cancellation is expected; do not update state here.
     } catch {
-      logger.error("SSE read loop ended with error. \(error)")
-      if
-        let error = error as? NSError,
-        error.domain == NSURLErrorDomain,
-        error.code == NSURLErrorTimedOut
-      {
-        logger.warning("SSE connection closed / timed out. Will try to reconnect")
-        return
+      // Extract the URL string for logging
+      let urlString = endpoint.absoluteString
+
+      // Check if the error is an NSError so we can inspect its domain and code.
+      if let nsError = error as NSError? {
+        logger.error("Error in SSE read loop for URL \(urlString): Domain=\(nsError.domain) Code=\(nsError.code) \(nsError.localizedDescription)")
+
+        // For example, if the error indicates the connection was lost or timed out:
+        if nsError.domain == NSURLErrorDomain &&
+            (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorNetworkConnectionLost) {
+          // For these error types, we want to trigger reconnection immediately.
+          state = .failed(error)
+          cleanup(error)
+          throw TransportError.connectionFailed("SSE connection lost or timed out, triggering immediate reconnection.")
+        } else {
+          // For any other error, we might choose to log and propagate the error normally.
+          state = .failed(error)
+          cleanup(error)
+          throw error
+        }
+      } else {
+        // Fallback in case the error isn't an NSError
+        logger.error("Fatal error in SSE read loop for URL \(urlString): \(error.localizedDescription)")
+        state = .failed(error)
+        cleanup(error)
+        throw error
       }
-      throw error
     }
   }
 
@@ -500,29 +530,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
         return url
       }
       throw TransportError.invalidState("URL never resolved")
-    }
-  }
-
-  // MARK: - Timeout Helper
-
-  /// Simple concurrency-based timeout wrapper for async operations.
-  private func withThrowingTimeout<T>(
-    seconds: TimeInterval,
-    operation: @escaping () async throws -> T)
-    async throws -> T
-  {
-    try await withThrowingTaskGroup(of: T.self) { group in
-      group.addTask { try await operation() }
-      group.addTask {
-        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-        throw TransportError.timeout(operation: "\(seconds)s elapsed")
-      }
-      let result = try await group.next()
-      group.cancelAll()
-      if let result {
-        return result
-      }
-      throw TransportError.operationFailed("\(operation) returned nil result")
     }
   }
 }

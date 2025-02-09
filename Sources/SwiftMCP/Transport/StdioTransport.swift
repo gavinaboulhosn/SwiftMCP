@@ -37,7 +37,7 @@ public struct StdioTransportConfiguration: Codable {
 /// This transport is designed for long-running MCP servers launched via command line.
 /// Transport implementation using stdio for process-based communication.
 /// This transport is designed for long-running MCP servers launched via command line.
-public actor StdioTransport: MCPTransport {
+public actor StdioTransport: MCPTransport, RetryableTransport {
 
   // MARK: Lifecycle
 
@@ -238,6 +238,7 @@ public actor StdioTransport: MCPTransport {
 
   private func readMessages(_ outPipe: Pipe) async {
     do {
+      // Process each line from the stdout byte stream.
       for try await line in outPipe.bytes.lines {
         try Task.checkCancellation()
         guard let data = line.data(using: .utf8) else {
@@ -245,17 +246,26 @@ public actor StdioTransport: MCPTransport {
           continue
         }
         if let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: data) {
-          guard let messagesContinuation else {
-            logger.error("Message received with nobody listening \(data)")
+          guard let continuation = messagesContinuation else {
+            logger.error("Received message with no active listener: \(data)")
             continue
           }
-          messagesContinuation.yield(message)
+          continuation.yield(message)
         }
       }
+      // The stdout stream ended normally.
+      logger.debug("Stdout stream ended gracefully.")
+      // Ensure a full cleanup by awaiting stop() (which updates state and finishes continuations).
+      await stop()
+    } catch is CancellationError {
+      logger.debug("Stdout read task cancelled.")
     } catch {
-      logger.error("Error reading stdout messages: \(error)")
+      // Log the error with its localized description.
+      logger.error("Fatal error in reading stdout messages: \(error.localizedDescription)")
+      // Update state to failed and trigger cleanup.
+      state = .failed(error)
+      await stop()
     }
-    stop()
   }
 }
 

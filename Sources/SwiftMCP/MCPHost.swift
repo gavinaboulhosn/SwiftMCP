@@ -150,12 +150,12 @@ public actor MCPHost {
 
   /// Indicates whether any connections are in a failed state.
   public func hasFailedConnections() -> Bool {
-    connections.values.contains { $0.status == .failed }
+    connections.values.contains { $0.status.hasError }
   }
 
   /// Returns all connections currently in the failed state.
   public func failedConnections() -> [ConnectionState] {
-    connections.values.filter { $0.status == .failed }
+    connections.values.filter { $0.status.hasError }
   }
 
   // MARK: Private

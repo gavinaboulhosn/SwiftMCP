@@ -175,27 +175,32 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
   }
 
   private func startMessageReceiver() {
-    if let messageReceiverTask {
-      logger.warning("message reciever task already running. ignoring this call")
+    // Prevent multiple receiver tasks from being created.
+    if let receiverTask = messageReceiverTask {
+      logger.warning("Message receiver task already running. Ignoring duplicate start.")
       return
     }
 
     messageReceiverTask = Task {
-      try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask {
-          while true {
-            try Task.checkCancellation()
-            try await self.readLoop()
+      // Extract the URL string for logging.
+      let endpointURL = url.absoluteString
+      do {
+        while true {
+          try Task.checkCancellation()
+          guard let wsTask = webSocketTask else {
+            throw TransportError.invalidState("No WebSocket Task available")
           }
+          // Continuously receive messages.
+          let message = try await wsTask.receive()
+          try await handleMessage(message)
         }
-        group.addTask {
-          while true {
-            try Task.checkCancellation()
-            try await self.startHealthCheckTask()
-          }
-        }
-        try await group.next()
-        group.cancelAll()
+      } catch is CancellationError {
+        logger.debug("WebSocket message receiver cancelled for URL: \(endpointURL)")
+      } catch {
+        logger.error("Fatal error in WebSocket read loop for URL \(endpointURL): \(error.localizedDescription)")
+        // Update state to failed.
+        state = .failed(error)
+        cleanup(error)
       }
     }
   }
@@ -204,23 +209,33 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
     guard let webSocketTask else {
       throw TransportError.invalidState("No WebSocket Task")
     }
-    let message = try await webSocketTask.receive()
-    try await handleMessage(message)
-    logger.error("No longer handling messages")
+    do {
+      while true {
+        try Task.checkCancellation()
+        let message = try await webSocketTask.receive()
+        try await handleMessage(message)
+      }
+    } catch is CancellationError {
+      logger.debug("WebSocket read loop task cancelled.")
+      cleanup(nil)
+      throw CancellationError()
+    } catch {
+      logger.error("WebSocket read loop encountered error: \(error)")
+      cleanup(error)
+      throw error
+    }
   }
 
   private func handleMessage(_ message: URLSessionWebSocketTask.Message) async throws {
     switch message {
-    case .data(let data):
-      messageContinuation?.yield(try parse(data))
-
-    case .string(let text):
-      if let data = text.data(using: .utf8) {
+      case .data(let data):
         messageContinuation?.yield(try parse(data))
-      }
-
-    @unknown default:
-      logger.warning("Received unknown message type")
+      case .string(let text):
+        if let data = text.data(using: .utf8) {
+          messageContinuation?.yield(try parse(data))
+        }
+      @unknown default:
+        logger.warning("Received unknown WebSocket message type")
     }
   }
 }

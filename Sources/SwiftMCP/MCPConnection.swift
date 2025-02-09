@@ -79,8 +79,8 @@ public final class ConnectionState: Identifiable {
           switch state {
           case .running:
             status = .connected
-          case .failed:
-            status = .failed
+          case .failed(let error):
+            status = .failed(error)
           case .disconnected:
             status = .disconnected
           case .connecting, .initializing:
@@ -355,17 +355,26 @@ public enum ConnectionStatus: Equatable, Sendable {
   case connected
   case connecting
   case disconnected
-  case failed
+  case failed(Error)
 
   public static func ==(lhs: ConnectionStatus, rhs: ConnectionStatus) -> Bool {
     switch (lhs, rhs) {
-    case (.connected, .connected),
-         (.connecting, .connecting),
-         (.disconnected, .disconnected),
-         (.failed, .failed):
-      true
-    default:
-      false
+      case (.connected, .connected),
+        (.connecting, .connecting),
+        (.disconnected, .disconnected),
+        (.failed, .failed):
+        true
+      default:
+        false
+    }
+  }
+
+  public var hasError: Bool {
+    switch self {
+      case .failed:
+        return true
+      default:
+        return false
     }
   }
 }
