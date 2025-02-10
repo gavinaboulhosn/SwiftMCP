@@ -334,9 +334,19 @@ public actor StdioTransport: MCPTransport {
 
   public var isRunning: Bool { false }
 
-  public func messages() -> AsyncThrowingStream<Data, Error> {
-    AsyncThrowingStream { continuation in
-      continuation.finish(throwing: TransportError.unsupportedPlatform)
+  public var messages: AsyncThrowingStream<JSONRPCMessage, Error> {
+    get throws {
+      AsyncThrowingStream { continuation in
+        continuation.finish(throwing: TransportError.unsupportedPlatform)
+      }
+    }
+  }
+
+  public var stateMessages: AsyncStream<TransportState> {
+    get throws {
+      AsyncStream { continuation in
+        continuation.finish()
+      }
     }
   }
 
