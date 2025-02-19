@@ -54,8 +54,8 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     config.httpShouldSetCookies = true
     config.httpCookieStorage = .shared
     config.httpCookieAcceptPolicy = .always
-    config.timeoutIntervalForRequest = configuration.baseConfiguration.requestTimeout
-    config.timeoutIntervalForResource = configuration.baseConfiguration.responseTimeout
+    config.timeoutIntervalForRequest = 300  // 5 minutes
+    config.timeoutIntervalForResource = 3600 // 1 hour
     config.waitsForConnectivity = true
     session = URLSession(configuration: config)
     logger.debug("Initialized SSEClientTransport with sseURL=\(configuration.sseURL.absoluteString)")
@@ -217,10 +217,15 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   private var postURLContinuations: [AsyncStream<URL>.Continuation] = []
   private var connectedContinuation: AsyncStream<Void>.Continuation?
   private var pendingRequests: [JSONRPCMessage] = []
+  private var keepAliveTask: Task<Void, Error>?
+  private var reconnectAttempt: Int = 0
+  private let maxReconnectAttempts = 10 // Maximum number of reconnection attempts
 
   private func cleanup(_ error: Error?) {
     sseReadTask?.cancel()
     sseReadTask = nil
+    keepAliveTask?.cancel()
+    keepAliveTask = nil
     messageContinuation?.finish(throwing: error)
     messageContinuation = nil
     connectedContinuation?.finish()
@@ -237,6 +242,10 @@ private func readLoop() async throws {
     let endpoint = sseURL
     while true {
       do {
+        // Cancel any existing keep-alive task
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
+        
         var request = URLRequest(url: endpoint)
         request.timeoutInterval = configuration.connectTimeout
 
@@ -256,8 +265,27 @@ private func readLoop() async throws {
           }
         }
         
+        // Start new keep-alive task only after successful connection
         let (byteStream, response) = try await session.bytes(for: request)
         try validateHTTPResponse(response)
+        
+        // Connection successful, start keep-alive
+        keepAliveTask = Task {
+          do {
+            while true {
+              try await Task.sleep(for: .seconds(25))
+              if let data = ": keepalive\n\n".data(using: .utf8) {
+                logger.debug("Sending keep-alive message")
+                // Process the keep-alive as a normal SSE message
+                try await handleSSEEvent(type: "message", id: nil, data: data)
+              }
+            }
+          } catch {
+            logger.debug("Keep-alive task cancelled: \(error.localizedDescription)")
+          }
+        }
+        
+        
 
         var dataBuffer = Data()
         var eventType = "message"
@@ -328,15 +356,35 @@ private func readLoop() async throws {
           logger.error(
             "Error in SSE read loop for URL \(endpoint.absoluteString): Domain=\(nsError.domain) Code=\(nsError.code) \(nsError.localizedDescription)")
           
-          if nsError.domain == NSURLErrorDomain &&
-             (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorNetworkConnectionLost) {
-            state = .connecting
-            try await Task.sleep(for: .milliseconds(100))
-            continue
-          } else {
+          if nsError.domain == NSURLErrorDomain {
+            let isRecoverable = nsError.code == NSURLErrorCancelled ||
+                               nsError.code == NSURLErrorTimedOut ||
+                               nsError.code == NSURLErrorNetworkConnectionLost
+            
+            if isRecoverable {
+                switch nsError.code {
+                case NSURLErrorCancelled:
+                    logger.info("Connection cancelled, attempting reconnection...")
+                case NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost:
+                    logger.info("Connection lost or timed out, attempting reconnection...")
+                default:
+                    break // Should never happen due to isRecoverable check
+                }
+                
+                // Try to reconnect
+                if try await attemptReconnection() {
+                    continue
+                }
+            }
+            
+            // If not recoverable or reconnection failed
             state = .disconnected
             cleanup(error)
             throw error
+          } else {
+              state = .disconnected
+              cleanup(error)
+              throw error
           }
         } else {
           logger.error("Fatal error in SSE read loop for URL \(endpoint.absoluteString): \(error.localizedDescription)")
@@ -458,6 +506,7 @@ private func readLoop() async throws {
     
     // First endpoint event means we're ready to start sending messages
     state = .connected
+    reconnectAttempt = 0 // Reset reconnection counter on successful connection
     connectedContinuation?.yield()
     connectedContinuation?.finish()
     
@@ -468,6 +517,20 @@ private func readLoop() async throws {
       }
     }
     pendingRequests.removeAll()
+  }
+
+  private func attemptReconnection() async throws -> Bool {
+    if reconnectAttempt < maxReconnectAttempts {
+        reconnectAttempt += 1
+        let delay = TimeInterval(pow(2.0, Double(reconnectAttempt - 1))) // Exponential backoff
+        logger.info("Reconnection attempt \(self.reconnectAttempt)/\(self.maxReconnectAttempts) in \(delay) seconds")
+        state = .connecting
+        try await Task.sleep(for: .seconds(delay))
+        return true
+    } else {
+        logger.error("Maximum reconnection attempts (\(self.maxReconnectAttempts)) reached")
+        return false
+    }
   }
 
   private func parseRetry(_ line: String) -> Int? {
