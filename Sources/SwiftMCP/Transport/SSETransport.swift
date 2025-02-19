@@ -8,7 +8,6 @@ extension SSETransportConfiguration {
     sseURL: URL(string: "http://localhost:3000")!,
     postURL: nil,
     sseHeaders: ["some": "sse-value"],
-    postHeaders: ["another": "post-value"],
     baseConfiguration: .dummyData)
 }
 
@@ -21,13 +20,11 @@ public struct SSETransportConfiguration: Codable {
     sseURL: URL,
     postURL: URL? = nil,
     sseHeaders: [String: String] = [:],
-    postHeaders: [String: String] = [:],
     baseConfiguration: TransportConfiguration = .default)
   {
     self.sseURL = sseURL
     self.postURL = postURL
     self.sseHeaders = sseHeaders
-    self.postHeaders = postHeaders
     self.baseConfiguration = baseConfiguration
   }
 
@@ -36,14 +33,9 @@ public struct SSETransportConfiguration: Codable {
   public static let defaultSSEHeaders: [String: String] = [
     "Accept": "text/event-stream",
   ]
-  public static let defaultPOSTHeaders: [String: String] = [
-    "Content-Type": "application/json",
-  ]
-
   public var sseURL: URL
   public var postURL: URL?
   public var sseHeaders: [String: String]
-  public var postHeaders: [String: String]
   public var baseConfiguration: TransportConfiguration
 
 }
@@ -58,13 +50,14 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
 
   public init(configuration: SSETransportConfiguration) {
     _configuration = configuration
-    session = URLSession(configuration: .ephemeral)
-    session.configuration.httpShouldSetCookies = true
-    session.configuration.httpCookieStorage = .shared
-    session.configuration.httpCookieAcceptPolicy = .always
-    session.configuration.timeoutIntervalForRequest = configuration.baseConfiguration.requestTimeout
-    session.configuration.timeoutIntervalForResource = configuration.baseConfiguration.responseTimeout
-    session.configuration.waitsForConnectivity = configuration.baseConfiguration.connectTimeout > 0
+    let config = URLSessionConfiguration.ephemeral
+    config.httpShouldSetCookies = true
+    config.httpCookieStorage = .shared
+    config.httpCookieAcceptPolicy = .always
+    config.timeoutIntervalForRequest = configuration.baseConfiguration.requestTimeout
+    config.timeoutIntervalForResource = configuration.baseConfiguration.responseTimeout
+    config.waitsForConnectivity = true
+    session = URLSession(configuration: config)
     logger.debug("Initialized SSEClientTransport with sseURL=\(configuration.sseURL.absoluteString)")
   }
 
@@ -72,14 +65,12 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     sseURL: URL,
     postURL: URL? = nil,
     sseHeaders: [String: String] = [:],
-    postHeaders: [String: String] = [:],
     baseConfiguration: TransportConfiguration = .defaultSSE)
   {
     let configuration = SSETransportConfiguration(
       sseURL: sseURL,
       postURL: postURL,
       sseHeaders: sseHeaders,
-      postHeaders: postHeaders,
       baseConfiguration: baseConfiguration)
     self.init(configuration: configuration)
   }
@@ -118,7 +109,6 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   }
 
   public var sseHeaders: [String: String] { _configuration.sseHeaders }
-  public var postHeaders: [String: String] { _configuration.postHeaders }
 
   public var messages: AsyncThrowingStream<JSONRPCMessage, Error> {
     get throws {
@@ -226,6 +216,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   private var transportStateContinuation: AsyncStream<TransportState>.Continuation?
   private var postURLContinuations: [AsyncStream<URL>.Continuation] = []
   private var connectedContinuation: AsyncStream<Void>.Continuation?
+  private var pendingRequests: [JSONRPCMessage] = []
 
   private func cleanup(_ error: Error?) {
     sseReadTask?.cancel()
@@ -242,112 +233,167 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     postURLContinuations.removeAll()
   }
 
-  private func readLoop() async throws {
+private func readLoop() async throws {
     let endpoint = sseURL
-    do {
-      var request = URLRequest(url: endpoint)
-      request.timeoutInterval = configuration.connectTimeout
-      for (key, value) in SSETransportConfiguration.defaultSSEHeaders {
-        logger.info("Setting default SSE header: \(key): \(value)")
-        request.setValue(value, forHTTPHeaderField: key)
-      }
-      for (key, value) in sseHeaders {
-        logger.info("Setting SSE header: \(key): \(value)")
-        request.addValue(value, forHTTPHeaderField: key)
-      }
-      if let headers = request.allHTTPHeaderFields {
-        for (key, value) in headers {
-          logger.info("Final header: \(key): \(value ?? "nil")")
+    while true {
+      do {
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = configuration.connectTimeout
+
+        for (key, value) in SSETransportConfiguration.defaultSSEHeaders {
+          logger.info("Setting default SSE header: \(key): \(value)")
+          request.setValue(value, forHTTPHeaderField: key)
         }
-      }
-      let (byteStream, response) = try await session.bytes(for: request)
-      try validateHTTPResponse(response)
-      state = .connected
-      connectedContinuation?.yield()
-      connectedContinuation?.finish()
+        
+        for (key, value) in sseHeaders {
+          logger.info("Setting SSE header: \(key): \(value)")
+          request.addValue(value, forHTTPHeaderField: key)
+        }
+        
+        if let headers = request.allHTTPHeaderFields {
+          for (key, value) in headers {
+            logger.info("Final header: \(key): \(value ?? "nil")")
+          }
+        }
+        
+        let (byteStream, response) = try await session.bytes(for: request)
+        try validateHTTPResponse(response)
 
-      var dataBuffer = Data()
-      var eventType = "message"
-      var eventID: String?
+        var dataBuffer = Data()
+        var eventType = "message"
+        var eventID: String?
 
-      for try await line in byteStream.allLines {
-        try Task.checkCancellation()
-        if line.isEmpty {
+        for try await line in byteStream.allLines {
+          // Trim whitespace and newlines from the line
+          let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+          print("SSE line: \(trimmedLine)")
+          try Task.checkCancellation()
+          
+          // If the trimmed line is empty, then it marks the end of an event.
+          if trimmedLine.isEmpty {
+            if !dataBuffer.isEmpty {
+              print("Processing event: type=\(eventType), data=\(String(data: dataBuffer, encoding: .utf8) ?? "invalid utf8")")
+              try await handleSSEEvent(type: eventType, id: eventID, data: dataBuffer)
+              dataBuffer.removeAll()
+              eventType = "message" // Reset to default
+              eventID = nil
+            } else {
+              print("Empty line received but data buffer is empty")
+            }
+            continue
+          }
+          
+          // Check for comment lines (starting with a colon)
+          if trimmedLine.hasPrefix(":") {
+            continue
+          }
+          
+          // Parse field
+          if trimmedLine.hasPrefix("event:") {
+            eventType = String(trimmedLine.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            print("Event type set to: \(eventType)")
+          } else if trimmedLine.hasPrefix("data:") {
+            let text = String(trimmedLine.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            if let chunk = (text + "\n").data(using: .utf8) {
+              dataBuffer.append(chunk)
+              print("Data buffer now contains: \(String(data: dataBuffer, encoding: .utf8) ?? "invalid utf8")")
+            }
+          } else if trimmedLine.hasPrefix("id:") {
+            eventID = String(trimmedLine.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+          } else if trimmedLine.hasPrefix("retry:") {
+            if let ms = Int(String(trimmedLine.dropFirst(6)).trimmingCharacters(in: .whitespaces)) {
+              logger.debug("Updating retry policy delay to \(ms) ms")
+              _configuration.baseConfiguration.retryPolicy.baseDelay = TimeInterval(ms) / 1000.0
+            }
+          } else {
+            logger.debug("Ignoring unknown SSE line: \(trimmedLine)")
+          }
+        }
+
+        // Process any remaining data
+        if !dataBuffer.isEmpty {
           try await handleSSEEvent(type: eventType, id: eventID, data: dataBuffer)
-          dataBuffer.removeAll()
-          eventType = "message"
-          eventID = nil
-          continue
-        } else if line.hasPrefix("event:") {
-          eventType = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-          continue
-        } else if line.hasPrefix("data:") {
-          let text = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-          if let chunk = text.data(using: .utf8) {
-            dataBuffer.append(chunk)
-          }
-        } else if line.hasPrefix("id:") {
-          eventID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-        } else if line.hasPrefix("retry:") {
-          if let ms = parseRetry(line) {
-            logger.debug("Updating retry policy delay to \(ms) ms")
-            _configuration.baseConfiguration.retryPolicy.baseDelay = TimeInterval(ms) / 1000.0
-          }
-        } else {
-          logger.debug("Ignoring unknown SSE line: \(line)")
         }
-      }
 
-      if !dataBuffer.isEmpty {
-        try await handleSSEEvent(type: eventType, id: eventID, data: dataBuffer)
-      }
+        logger.debug("SSE stream ended for URL \(endpoint.absoluteString), attempting immediate reconnection")
+        state = .connecting
+        try await Task.sleep(for: .milliseconds(100))
+        continue
 
-      logger.debug("SSE stream ended gracefully for URL \(endpoint.absoluteString)")
-      cleanup(nil)
-      throw TransportError.connectionFailed("SSE stream ended gracefully, triggering reconnection.")
-
-    } catch is CancellationError {
-      logger.debug("SSE read loop cancelled for URL \(endpoint.absoluteString)")
-    } catch {
-      let urlString = endpoint.absoluteString
-      if let nsError = error as NSError? {
-        logger
-          .error(
-            "Error in SSE read loop for URL \(urlString): Domain=\(nsError.domain) Code=\(nsError.code) \(nsError.localizedDescription)")
-        if
-          nsError.domain == NSURLErrorDomain &&
-          (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorNetworkConnectionLost)
-        {
-          state = .disconnected
-          cleanup(error)
-          throw TransportError.connectionFailed("SSE connection lost or timed out, triggering immediate reconnection.")
+      } catch is CancellationError {
+        logger.debug("SSE read loop cancelled for URL \(endpoint.absoluteString)")
+        throw TransportError.connectionFailed("SSE read loop cancelled")
+      } catch {
+        if let nsError = error as NSError? {
+          logger.error(
+            "Error in SSE read loop for URL \(endpoint.absoluteString): Domain=\(nsError.domain) Code=\(nsError.code) \(nsError.localizedDescription)")
+          
+          if nsError.domain == NSURLErrorDomain &&
+             (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorNetworkConnectionLost) {
+            state = .connecting
+            try await Task.sleep(for: .milliseconds(100))
+            continue
+          } else {
+            state = .disconnected
+            cleanup(error)
+            throw error
+          }
         } else {
+          logger.error("Fatal error in SSE read loop for URL \(endpoint.absoluteString): \(error.localizedDescription)")
           state = .disconnected
           cleanup(error)
           throw error
         }
-      } else {
-        logger.error("Fatal error in SSE read loop for URL \(urlString): \(error.localizedDescription)")
-        state = .disconnected
-        cleanup(error)
-        throw error
       }
     }
   }
-
+  
   private func handleSSEEvent(type: String, id: String?, data: Data) async throws {
-    logger.debug("SSE event id=\(id ?? ""), type=\(type), data=\(data).")
+    // Trim any whitespace or newlines from the event type
+    let cleanType = type.trimmingCharacters(in: .whitespacesAndNewlines)
+    
+    logger.debug("SSE event id=\(id ?? ""), type=\(cleanType), data=\(data.count) bytes.")
     guard data.count > 0 else {
       logger.debug("blank line passed to sse event handler")
       return
     }
-    switch type {
+
+    // Log the raw event data for debugging
+    if let rawData = String(data: data, encoding: .utf8) {
+      logger.debug("Raw event data: \(rawData)")
+    }
+
+    switch cleanType {
     case "endpoint":
+      logger.debug("Processing endpoint event...")
       try handleEndpointEvent(data)
+      logger.debug("Endpoint event processed successfully")
     case "message":
       try handleMessage(data)
+    case "ping":
+      // Keep the connection alive by sending a GET request
+      Task {
+        do {
+          var request = URLRequest(url: sseURL)
+          request.timeoutInterval = 5 // Short timeout for ping
+          request.httpMethod = "GET"
+          request.setValue("application/json", forHTTPHeaderField: "Accept")
+          for (key, value) in sseHeaders {
+            request.setValue(value, forHTTPHeaderField: key)
+          }
+            logger.debug("Sending ping response to \(self.sseURL.absoluteString)")
+          let (_, response) = try await session.data(for: request)
+          if let httpResponse = response as? HTTPURLResponse {
+            logger.debug("Ping response received with status: \(httpResponse.statusCode)")
+          }
+        } catch {
+          logger.error("Failed to send ping response: \(error.localizedDescription)")
+        }
+      }
+    case "":
+      logger.debug("Received empty event type, ignoring")
     default:
-      logger.warning("UNHANDLED EVENT TYPE: \(type)")
+      logger.warning("UNHANDLED EVENT TYPE: \(cleanType)")
     }
   }
 
@@ -364,25 +410,64 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
       let httpResp = response as? HTTPURLResponse,
       (200...299).contains(httpResp.statusCode)
     else {
-      throw TransportError.operationFailed("SSE request did not return HTTP 2XX.")
+      throw TransportError.operationFailed("SSE request did not return HTTP 2XX. Response: \(response)")
     }
   }
 
   private func handleEndpointEvent(_ data: Data) throws {
-    guard
-      let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !text.isEmpty
-    else {
+    let rawText = String(data: data, encoding: .utf8) ?? "invalid utf8"
+    print("Raw endpoint data: '\(rawText)'")
+    let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else {
+      logger.error("Empty or invalid 'endpoint' SSE event data")
       throw TransportError.invalidMessage("Empty or invalid 'endpoint' SSE event.")
     }
-    guard
-      let baseURL = URL(string: "/", relativeTo: sseURL)?.baseURL,
-      let newURL = URL(string: text, relativeTo: baseURL)
-    else {
-      throw TransportError.invalidMessage("Could not form absolute endpoint from: \(text)")
+
+    logger.debug("Parsing endpoint URL from: \(text)")
+    print("SSE URL: \(sseURL.absoluteString)")
+    
+    // Use the SSE URL as the base URL
+    let baseURL = sseURL
+    print("Using base URL: '\(baseURL.absoluteString)'")
+    
+    // Ensure the endpoint path starts with /
+    let endpointPath = text.hasPrefix("/") ? text : "/" + text
+    print("Endpoint path: '\(endpointPath)'")
+    
+    // Resolve the endpoint path against the base URL
+    guard let endpointURL = URL(string: endpointPath, relativeTo: baseURL)?.absoluteURL else {
+      logger.error("Failed to parse endpoint URL from: \(text)")
+      throw TransportError.invalidMessage("Could not parse endpoint URL from: \(text)")
     }
-    logger.debug("SSEClientTransport discovered POST endpoint: \(newURL.absoluteString)")
-    postURL = newURL
+    
+    logger.debug("Resolved endpoint URL: \(endpointURL.absoluteString)")
+    guard endpointURL.scheme == baseURL.scheme else {
+      logger.error("Endpoint URL scheme mismatch: \(endpointURL.scheme ?? "nil") != \(baseURL.scheme ?? "nil")")
+      throw TransportError.invalidMessage("Endpoint URL scheme mismatch")
+    }
+    
+    print("Final endpoint URL: '\(endpointURL.absoluteString)'")
+    
+    // Update the POST endpoint
+    if postURL != nil {
+        logger.debug("Replacing existing endpoint URL \(self.postURL!.absoluteString) with new URL \(endpointURL.absoluteString)")
+    }
+    
+    logger.debug("SSEClientTransport discovered POST endpoint: \(endpointURL.absoluteString)")
+    postURL = endpointURL
+    
+    // First endpoint event means we're ready to start sending messages
+    state = .connected
+    connectedContinuation?.yield()
+    connectedContinuation?.finish()
+    
+    // Retry any pending requests with new endpoint
+    for message in pendingRequests {
+      Task {
+        try? await send(message)
+      }
+    }
+    pendingRequests.removeAll()
   }
 
   private func parseRetry(_ line: String) -> Int? {
@@ -396,16 +481,19 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     timeout: TimeInterval?)
     async throws
   {
+    guard let targetURL = postURL else {
+      // Queue the request if we don't have a POST endpoint yet
+      pendingRequests.append(message)
+      throw TransportError.invalidState("No POST endpoint available, request queued for retry")
+    }
+    
     let messageData = try validate(message)
-    var request = URLRequest(url: url)
+    var request = URLRequest(url: targetURL)
     request.httpMethod = "POST"
     request.timeoutInterval = timeout ?? configuration.sendTimeout
     request.httpBody = messageData
-    for (k, v) in SSETransportConfiguration.defaultPOSTHeaders {
-      logger.info("setting \(k): \(v)")
-      request.setValue(v, forHTTPHeaderField: k)
-    }
-    for (k, v) in postHeaders {
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    for (k, v) in sseHeaders {
       logger.info("setting \(k): \(v)")
       request.setValue(v, forHTTPHeaderField: k)
     }
@@ -423,17 +511,19 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
       logger.debug("Received non-text response of \(data.count) bytes")
     }
     try validateHTTPResponse(httpResponse)
-    logger.debug("SSEClientTransport POST send succeeded to \(url.absoluteString) with status code \(httpResponse.statusCode)")
+    logger.debug("SSEClientTransport POST send succeeded to \(targetURL.absoluteString) with status code \(httpResponse.statusCode)")
   }
 
-  private func resolvePostURL(timeout: TimeInterval = 5) async throws -> URL {
-    if let existing = postURL { return existing }
-    let (stream, continuation) = AsyncStream.makeStream(of: URL.self)
-    postURLContinuations.append(continuation)
-    return try await withThrowingTimeout(seconds: timeout) {
-      for try await url in stream { return url }
-      throw TransportError.invalidState("URL never resolved")
+  private func resolvePostURL(timeout: TimeInterval = 25) async throws -> URL {
+    // Wait for a valid postURL
+    let endTime = Date().addingTimeInterval(timeout)
+    while postURL == nil {
+      guard Date() < endTime else {
+        throw TransportError.timeout(operation: "Waiting for endpoint URL")
+      }
+      try await Task.sleep(for: .milliseconds(100))
     }
+    return postURL!
   }
 }
 
