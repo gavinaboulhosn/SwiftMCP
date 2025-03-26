@@ -49,7 +49,7 @@ public actor StdioTransport: MCPTransport, RetryableTransport {
   }
 
   /// Convenience initializer
-  public convenience init(
+  public init(
     command: String,
     arguments: [String] = [],
     environment: [String: String] = [:],
@@ -229,10 +229,15 @@ public actor StdioTransport: MCPTransport, RetryableTransport {
 
   private func monitorStdErr(_ errPipe: Pipe) async {
     do {
+      // Note: AsyncSequence.lines can throw errors if pipe is closed unexpectedly
+      // We also need to check for cancellation
       for try await line in errPipe.bytes.lines {
+        try Task.checkCancellation()
         // Some MCP servers use stderr for logging
         logger.info("[SERVER STDERR] \(line)")
       }
+    } catch is CancellationError {
+      logger.debug("StdErr monitoring cancelled")
     } catch {
       logger.error("Error reading stderr: \(error)")
     }
@@ -255,13 +260,13 @@ public actor StdioTransport: MCPTransport, RetryableTransport {
         }
       }
       logger.debug("Stdout stream ended gracefully.")
-      await stop()
+      stop()
     } catch is CancellationError {
       logger.debug("Stdout read task cancelled.")
     } catch {
       logger.error("Fatal error in reading stdout messages: \(error.localizedDescription)")
       state = .disconnected
-      await stop()
+      stop()
     }
   }
 }
@@ -310,7 +315,7 @@ public actor StdioTransport: MCPTransport {
     _configuration = configuration
   }
 
-  public convenience init(
+  public init(
     command: String,
     arguments: [String] = [],
     environment: [String: String] = [:],

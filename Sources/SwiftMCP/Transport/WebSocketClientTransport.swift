@@ -8,7 +8,7 @@ private let logger = Logger(subsystem: "SwiftMCP", category: "WebSocketClientTra
 extension WebSocketTransportConfiguration {
   public static let dummyData: WebSocketTransportConfiguration =
     try! WebSocketTransportConfiguration(
-      endpointURL: URL("ws://localhost:3000")!,
+      endpointURL: URL(string: "ws://localhost:3000")!,
       baseConfiguration: .dummyData)
 }
 
@@ -67,13 +67,33 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
       configuration.baseConfiguration.responseTimeout
     session.configuration.waitsForConnectivity = configuration.baseConfiguration.connectTimeout > 0
 
-    delegate.onOpen = handleOpen
-    delegate.onClose = onClose
-    delegate.onError = handleError
+    // Create a weak reference to self to avoid retain cycles
+    weak var weakSelf = self
+    
+    delegate.onOpen = { 
+      if let transport = weakSelf {
+        Task { await transport.handleOpen() }
+      }
+    }
+    
+    delegate.onClose = { reason in
+      if let transport = weakSelf {
+        Task { await transport.onClose(reason) }
+      }
+    }
+    
+    delegate.onError = { error in
+      if let transport = weakSelf {
+        Task { await transport.handleError(error) }
+      }
+    }
   }
 
   deinit {
-    cleanup(nil)
+    // For Swift 6 compatibility, we cancel tasks directly without capturing self
+    messageReceiverTask?.cancel()
+    webSocketTask?.cancel(with: .normalClosure, reason: nil)
+    // Other cleanup will happen automatically as the object is deallocated
   }
 
   // MARK: Public
@@ -159,7 +179,7 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
     transportStateContinuation?.finish()
     transportStateContinuation = nil
     // TODO : revisit these exit codes
-    if let error {
+    if error != nil {
       webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
     } else {
       webSocketTask?.cancel(with: .normalClosure, reason: nil)
@@ -191,7 +211,7 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
 
   private func startMessageReceiver() {
     // Prevent multiple receiver tasks from being created.
-    if let receiverTask = messageReceiverTask {
+    if messageReceiverTask != nil {
       logger.warning("Message receiver task already running. Ignoring duplicate start.")
       return
     }

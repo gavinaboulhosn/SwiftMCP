@@ -4,42 +4,6 @@ import OSLog
 
 private let logger = Logger(subsystem: "SwiftMCP", category: "ConnectionState")
 
-// MARK: - ConnectionStateEvent
-
-/// Events that a `ConnectionState` can emit, e.g., status changes.
-public enum ConnectionStateEvent {
-  /// The connection's status changed
-  case statusChanged(ConnectionStatus)
-  case clientError(Error)
-}
-
-// MARK: - ContinuationStore
-
-/// Actor to manage continuations safely
-private actor ContinuationStore {
-
-  // MARK: Internal
-
-  func store(_ id: UUID, _ continuation: AsyncStream<ConnectionStateEvent>.Continuation) {
-    continuations[id] = continuation
-  }
-
-  func remove(_ id: UUID) {
-    continuations.removeValue(forKey: id)
-  }
-
-  func yieldToAll(_ event: ConnectionStateEvent) {
-    for continuation in continuations.values {
-      continuation.yield(event)
-    }
-  }
-
-  // MARK: Private
-
-  private var continuations: [UUID: AsyncStream<ConnectionStateEvent>.Continuation] = [:]
-
-}
-
 // MARK: - ConnectionState
 
 /// A handle for interacting with a specific MCP server connection,
@@ -346,38 +310,4 @@ extension ConnectionState: Equatable {
       && lhs.resources == rhs.resources && lhs.prompts == rhs.prompts
       && lhs.lastActivity == rhs.lastActivity && lhs.reconnectCount == rhs.reconnectCount
   }
-}
-
-// MARK: - ConnectionStatus
-
-/// Represents the overall connection status from a high-level perspective.
-public enum ConnectionStatus: Equatable, Sendable {
-  case connected
-  case connecting
-  case disconnected
-  case failed(Error)
-
-  // MARK: Public
-
-  public var hasError: Bool {
-    switch self {
-    case .failed:
-      return true
-    default:
-      return false
-    }
-  }
-
-  public static func ==(lhs: ConnectionStatus, rhs: ConnectionStatus) -> Bool {
-    switch (lhs, rhs) {
-    case (.connected, .connected),
-         (.connecting, .connecting),
-         (.disconnected, .disconnected),
-         (.failed, .failed):
-      true
-    default:
-      false
-    }
-  }
-
 }

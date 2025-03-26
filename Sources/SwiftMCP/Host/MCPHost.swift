@@ -1,18 +1,6 @@
 import Foundation
 import OSLog
 
-// MARK: - MCPHostEvent
-
-/// Events emitted by an `MCPHost`:
-/// - connectionAdded: A new connection was added
-/// - connectionRemoved: A connection was removed
-/// - connectionStatusChanged: The status of a connection changed
-public enum MCPHostEvent {
-  case connectionAdded(ConnectionState)
-  case connectionRemoved(String)
-  case connectionStatusChanged(ConnectionState)
-}
-
 // MARK: - MCPHost
 
 /// The primary interface for interacting with multiple MCP server connections at once.
@@ -199,38 +187,6 @@ public actor MCPHost {
       await state.refreshResources()
     default:
       break
-    }
-  }
-}
-
-// MARK: - MCPHostError
-
-/// Host-level errors that are not part of the MCP protocol itself.
-///
-/// For instance, "no such connection," "connection already exists," or other
-/// usage errors at the MCPHost level.
-public enum MCPHostError: Error, LocalizedError {
-  /// No connection found for a given ID
-  case connectionNotFound(String)
-  /// A connection with the same ID already exists
-  case connectionExists(String)
-  /// Operation is invalid in the current host context
-  case invalidOperation(String)
-  /// Catch-all for unknown issues
-  case unknown(String)
-
-  // MARK: Public
-
-  public var errorDescription: String? {
-    switch self {
-    case .connectionNotFound(let id):
-      "No connection found for id: \(id)"
-    case .connectionExists(let id):
-      "A connection with id '\(id)' already exists."
-    case .invalidOperation(let msg):
-      "Invalid host operation: \(msg)"
-    case .unknown(let msg):
-      "Unknown Host Error: \(msg)"
     }
   }
 }

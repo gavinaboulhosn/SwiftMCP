@@ -1,50 +1,5 @@
 import Foundation
 
-// MARK: - RequestID
-
-/// A request ID type that can be string or int.
-public enum RequestID: Codable, Hashable, Sendable, CustomStringConvertible {
-  case string(String)
-  case int(Int)
-
-  // MARK: Lifecycle
-
-  public init(from decoder: Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    if let intValue = try? container.decode(Int.self) {
-      self = .int(intValue)
-    } else if let stringValue = try? container.decode(String.self) {
-      self = .string(stringValue)
-    } else {
-      throw DecodingError.dataCorruptedError(
-        in: container,
-        debugDescription: "RequestId must be string or int")
-    }
-  }
-
-  // MARK: Public
-
-  public var description: String {
-    switch self {
-    case .string(let string):
-      string
-    case .int(let int):
-      "\(int)"
-    }
-  }
-
-  public func encode(to encoder: Encoder) throws {
-    var container = encoder.singleValueContainer()
-    switch self {
-    case .string(let stringValue): try container.encode(stringValue)
-    case .int(let intValue): try container.encode(intValue)
-    }
-  }
-
-}
-
-// MARK: - AnyCodable
-
 /// AnyCodable helper for dynamic JSON fields.
 public struct AnyCodable: Codable, Sendable, Equatable {
 
@@ -134,53 +89,4 @@ public struct AnyCodable: Codable, Sendable, Equatable {
   }
 
   private let storage: Storage
-
-}
-
-extension KeyedEncodingContainer {
-  mutating func encodeAny(_ value: Encodable, forKey key: Key) throws {
-    let wrapper = AnyEncodable(value)
-    try encode(wrapper, forKey: key)
-  }
-}
-
-/// A type-erased Encodable wrapper.
-struct AnyEncodable: Encodable {
-  private let encodeFunc: (Encoder) throws -> Void
-
-  init(_ value: Encodable) {
-    encodeFunc = { encoder in
-      try value.encode(to: encoder)
-    }
-  }
-
-  func encode(to encoder: Encoder) throws {
-    try encodeFunc(encoder)
-  }
-}
-
-func decodeParams<T: Decodable>(
-  _: T.Type,
-  from dict: [String: AnyCodable]?)
-  -> T?
-{
-  guard let dict else {
-    // If T has no required fields, attempt to decode an empty dictionary
-    let data = try? JSONEncoder().encode([String: AnyCodable]())
-    return data.flatMap { try? JSONDecoder().decode(T.self, from: $0) }
-  }
-
-  // Use JSONEncoder to encode the dictionary
-  guard let data = try? JSONEncoder().encode(dict) else {
-    NSLog("Failed to encode params using JSONEncoder.")
-    return nil
-  }
-
-  // Decode the data into the desired type
-  do {
-    return try JSONDecoder().decode(T.self, from: data)
-  } catch {
-    NSLog("Decoding failed with error: \(error)")
-    return nil
-  }
 }

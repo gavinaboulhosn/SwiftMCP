@@ -3,18 +3,6 @@ import OSLog
 
 private let logger = Logger(subsystem: "SwiftMCP", category: "MCPClient")
 
-// MARK: - MCPClientEvent
-
-/// Events emitted by `MCPClient`, bridging some internal states and messages.
-public enum MCPClientEvent {
-  /// Connection state changed (connecting, running, disconnected, etc.)
-  case connectionChanged(MCPEndpointState<InitializeResult>)
-  /// Incoming MCP message (JSON-RPC request/notification from server)
-  case message(any MCPMessage)
-  /// Indicates an error encountered in the MCP client
-  case error(Error)
-}
-
 // MARK: - MCPClient
 
 /// A client (endpoint) for the Model Context Protocol (MCP).
@@ -52,22 +40,6 @@ public actor MCPClient: MCPEndpointProtocol {
   // MARK: Public
 
   public typealias SessionInfo = InitializeResult
-
-  /// Configuration for the client, specifying `Implementation` details
-  /// and `ClientCapabilities`.
-  public struct Configuration {
-    public let clientInfo: Implementation
-    public let capabilities: ClientCapabilities
-
-    public init(clientInfo: Implementation, capabilities: ClientCapabilities) {
-      self.clientInfo = clientInfo
-      self.capabilities = capabilities
-    }
-
-    public static let `default` = Configuration(
-      clientInfo: .defaultClient,
-      capabilities: .init())
-  }
 
   /// Stream of notifications from this client
   public let notifications: AsyncStream<any MCPNotification>
@@ -127,7 +99,7 @@ public actor MCPClient: MCPEndpointProtocol {
 
     messageTask = Task {
       do {
-        for try await message in await try transport.messages {
+        for try await message in try await transport.messages {
           try Task.checkCancellation()
           try await self.processIncomingMessage(message)
         }
@@ -658,43 +630,5 @@ extension MCPClient {
 
   public func ping() async throws {
     _ = try await send(PingRequest())
-  }
-}
-
-extension MCPClient {
-
-  // MARK: Public
-
-  public typealias ServerRequestHandler = (any MCPRequest) async throws -> any MCPResponse
-
-  // MARK: Private
-
-  private protocol PendingRequestProtocol {
-    func cancel(with error: Error)
-    func complete(with response: any MCPResponse) throws
-
-    var responseType: any MCPResponse.Type { get }
-    var message: JSONRPCMessage { get }
-  }
-
-  private struct PendingRequest<Response: MCPResponse>: PendingRequestProtocol {
-    let message: JSONRPCMessage
-    let continuation: CheckedContinuation<Response, any Error>
-    let timeoutTask: Task<Void, Never>?
-
-    var responseType: any MCPResponse.Type { Response.self }
-
-    func cancel(with error: Error) {
-      timeoutTask?.cancel()
-      continuation.resume(throwing: error)
-    }
-
-    func complete(with response: any MCPResponse) throws {
-      guard let typedResponse = response as? Response else {
-        throw MCPError.internalError("Unexpected response type")
-      }
-      timeoutTask?.cancel()
-      continuation.resume(returning: typedResponse)
-    }
   }
 }
