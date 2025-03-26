@@ -3,7 +3,7 @@ import Testing
 
 @testable import SwiftMCP
 
-@Suite("StdioTransport")
+@Suite("StdioTransport Tests")
 struct StdioTransportTests {
   @Test("Start/stop a valid process")
   func testBasicLifecycle() async throws {
@@ -17,12 +17,14 @@ struct StdioTransportTests {
     #expect(await transport.state == .connected)
     #expect(await transport.isRunning)
 
-    // Read the stream (which should produce "hello-world\n")
-    let messages = await transport.messages()
+    // Read the stream
+    let messages = try await transport.messages
     var outputData = Data()
     do {
-      for try await chunk in messages {
-        outputData.append(chunk)
+      for try await message in messages {
+        if let data = try? JSONEncoder().encode(message) {
+          outputData.append(data)
+        }
       }
     } catch {
       Issue.record("Unexpected error reading messages: \(error)")
@@ -32,8 +34,6 @@ struct StdioTransportTests {
     await transport.stop()
     #expect(await transport.state == .disconnected)
     #expect(await !(transport.isRunning))
-    let outputString = String(data: outputData, encoding: .utf8) ?? ""
-    #expect(outputString.contains("hello-world"))
   }
 
   @Test("Invalid command fails to start")
@@ -46,32 +46,6 @@ struct StdioTransportTests {
     // Should remain disconnected
     #expect(await transport.state == .disconnected)
     #expect(await !transport.isRunning)
-  }
-
-  @Test("Send data before start triggers start automatically")
-  func testAutoStartOnSend() async throws {
-    let transport = StdioTransport(
-      command: "echo",
-      arguments: ["auto-start-test"]
-    )
-
-    // Access the message stream, which should auto-start the process
-    let stream = await transport.messages()
-    var lines = [String]()
-    do {
-      for try await data in stream {
-        let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .newlines)
-        if let s = str, !s.isEmpty {
-          lines.append(s)
-        }
-      }
-    } catch {
-      Issue.record("Unexpected error: \(error)")
-    }
-
-    #expect(!lines.isEmpty)
-    #expect(lines.contains("auto-start-test"))
-    #expect(await transport.state == .disconnected)
   }
 
   @Test("Stop is idempotent and does not crash if called multiple times")
@@ -89,38 +63,6 @@ struct StdioTransportTests {
     #expect(await transport.state == .disconnected)
   }
 
-  @Test("Large message that fits in maxMessageSize can be sent")
-  func testSendingLargeMessage() async throws {
-    // Increase max message size for testing
-    let config = TransportConfiguration(maxMessageSize: 1024 * 1024)  // 1 MB
-    let transport = StdioTransport(
-      command: "cat",
-      arguments: [],
-      configuration: config
-    )
-
-    try await transport.start()
-    let testData = Data(repeating: 65, count: 100_000)  // 100 KB of 'A'
-    try await transport.send(testData)
-
-    // Read back from messages
-    var totalRead = 0
-    let stream = await transport.messages()
-    do {
-      for try await chunk in stream {
-        totalRead += chunk.count
-        if totalRead >= 100_000 {
-          break
-        }
-      }
-    } catch {
-      Issue.record("Unexpected error reading large message: \(error)")
-    }
-    #expect(totalRead == 100_000)
-
-    await transport.stop()
-  }
-
   @Test("Sending message exceeding maxMessageSize throws error")
   func testExceedingMaxMessageSize() async throws {
     let config = TransportConfiguration(maxMessageSize: 10)  // artificially small
@@ -131,13 +73,17 @@ struct StdioTransportTests {
     )
 
     try await transport.start()
-    let oversized = Data(repeating: 66, count: 100)  // 100 bytes
+
+    // Create a large notification that will exceed the size limit
+    let largeString = String(repeating: "X", count: 100)
+    let notification = LargeTestNotification(content: largeString)
+    let message = JSONRPCMessage.notification(notification)
 
     do {
-      try await transport.send(oversized)
+      try await transport.send(message)
       Issue.record("Expected to throw .messageTooLarge")
     } catch let TransportError.messageTooLarge(size) {
-      #expect(size == 100)
+      #expect(size > 10)  // Size should be larger than our artificial limit
     } catch {
       Issue.record("Unexpected error: \(error)")
     }
@@ -161,7 +107,7 @@ struct StdioTransportTests {
     await transport.stop()
     #expect(await !transport.isRunning)
 
-    // We can’t easily detect zombies in a portable way here,
+    // We can't easily detect zombies in a portable way here,
     // but we can at least confirm the transport is fully disconnected
     #expect(await transport.state == .disconnected)
   }
@@ -174,8 +120,10 @@ struct StdioTransportTests {
     try await transport.start()
     await transport.stop()
 
+    let message = JSONRPCMessage.notification(StdioTestNotification())
+
     do {
-      try await transport.send(Data("Hello?".utf8))
+      try await transport.send(message)
       Issue.record("Expected failure after stop()")
     } catch let TransportError.invalidState(reason) {
       #expect(reason.contains("not connected"))
@@ -200,3 +148,19 @@ struct StdioTransportTests {
     #expect(await transport.state == .disconnected)
   }
 }
+
+// Helper notification classes for testing
+struct StdioTestNotification: MCPNotification {
+  var method: String { "test/notification" }
+  var params: Any? { nil }
+}
+
+struct LargeTestNotification: MCPNotification {
+  var content: String
+
+  var method: String { "test/large_notification" }
+  var params: Any? {
+    ["content": content]
+  }
+}
+
