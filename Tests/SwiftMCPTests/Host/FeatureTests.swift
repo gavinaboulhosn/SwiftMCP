@@ -130,7 +130,6 @@ struct FeatureTests {
 
     let sampleResponse = try await connection.callTool(
       "sampleLLM", arguments: ["prompt": "Hello, World!"])
-    print(sampleResponse)
     #expect(sampleResponse.content.count > 0)
   }
 
@@ -167,9 +166,6 @@ struct FeatureTests {
       arguments: ["temperature": "1"]
     )
     #expect(complexPrompt.messages.count > 0)
-
-    print(complexPrompt)
-    print(simplePrompt)
   }
 
   @Test("Host handles feature notifications")
