@@ -10,14 +10,21 @@ public struct ProgressNotification: MCPNotification {
     public let progress: Double
     public let progressToken: ProgressToken
     public let total: Double?
+    public let message: String?
   }
 
   public var params: Params
 
-  public init(progress: Double, progressToken: ProgressToken, total: Double? = nil) {
+  public init(
+    progress: Double,
+    progressToken: ProgressToken,
+    total: Double? = nil,
+    message: String? = nil
+  ) {
     params = Params(
       progress: progress,
       progressToken: progressToken,
-      total: total)
+      total: total,
+      message: message)
   }
 }
