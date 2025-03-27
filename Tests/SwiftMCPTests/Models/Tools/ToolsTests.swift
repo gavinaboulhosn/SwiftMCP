@@ -20,17 +20,31 @@ struct ToolsTests {
             }
             """
         let schema = try Schema(instance: schemaString)
+        let annotations = ToolAnnotations(
+            title: "Test Tool",
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false
+        )
         let tool = MCPTool(
             name: "test",
             description: "A test tool",
-            inputSchema: schema
+            inputSchema: schema,
+            annotations: annotations
         )
 
-        let encoded = try JSONEncoder().encode(tool)
+        let encoder = JSONEncoder()
+        let encoded = try encoder.encode(tool)
         let decoded = try JSONDecoder().decode(MCPTool.self, from: encoded)
 
         #expect(decoded.name == "test")
         #expect(decoded.description == "A test tool")
+        #expect(decoded.annotations?.title == "Test Tool")
+        #expect(decoded.annotations?.readOnlyHint == true)
+        #expect(decoded.annotations?.destructiveHint == false)
+        #expect(decoded.annotations?.idempotentHint == true)
+        #expect(decoded.annotations?.openWorldHint == false)
 
         // Verify schema validation works
         let validInstance = """
@@ -215,10 +229,18 @@ struct ToolsTests {
             }
             """
         let schema = try Schema(instance: schemaString)
+        let annotations = ToolAnnotations(
+            title: "Test Tool",
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false
+        )
         let tool = MCPTool(
             name: "test",
             description: "A test tool",
-            inputSchema: schema
+            inputSchema: schema,
+            annotations: annotations
         )
         let response = ListToolsResult(
             _meta: nil,
@@ -229,6 +251,43 @@ struct ToolsTests {
         let decodedResponse = try JSONDecoder().decode(ListToolsResult.self, from: encodedResponse)
         #expect(decodedResponse.tools.count == 1)
         #expect(decodedResponse.tools[0].name == "test")
+        #expect(decodedResponse.tools[0].annotations?.title == "Test Tool")
+        #expect(decodedResponse.tools[0].annotations?.readOnlyHint == true)
+        #expect(decodedResponse.tools[0].annotations?.destructiveHint == false)
+        #expect(decodedResponse.tools[0].annotations?.idempotentHint == true)
+        #expect(decodedResponse.tools[0].annotations?.openWorldHint == false)
         #expect(decodedResponse.nextCursor == "page2")
+    }
+
+    @Test("Tool Annotations")
+    func testToolAnnotations() async throws {
+        let annotations = ToolAnnotations(
+            title: "Test Tool",
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false
+        )
+
+        let encoder = JSONEncoder()
+        let encoded = try encoder.encode(annotations)
+        let decoded = try JSONDecoder().decode(ToolAnnotations.self, from: encoded)
+
+        #expect(decoded.title == "Test Tool")
+        #expect(decoded.readOnlyHint == true)
+        #expect(decoded.destructiveHint == false)
+        #expect(decoded.idempotentHint == true)
+        #expect(decoded.openWorldHint == false)
+
+        // Test optional fields
+        let minimalAnnotations = ToolAnnotations()
+        let minimalEncoded = try encoder.encode(minimalAnnotations)
+        let minimalDecoded = try JSONDecoder().decode(ToolAnnotations.self, from: minimalEncoded)
+
+        #expect(minimalDecoded.title == nil)
+        #expect(minimalDecoded.readOnlyHint == nil)
+        #expect(minimalDecoded.destructiveHint == nil)
+        #expect(minimalDecoded.idempotentHint == nil)
+        #expect(minimalDecoded.openWorldHint == nil)
     }
 }

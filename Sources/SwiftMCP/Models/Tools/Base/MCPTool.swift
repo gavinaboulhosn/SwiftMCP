@@ -21,6 +21,10 @@ import Foundation
 ///       "properties": {
 ///         "type": { "const": "object" }
 ///       }
+///     },
+///     "annotations": {
+///       "$ref": "#/definitions/ToolAnnotations",
+///       "description": "Optional additional tool information."
 ///     }
 ///   },
 ///   "required": ["inputSchema", "name"]
@@ -39,22 +43,29 @@ public struct MCPTool: Codable, Sendable, Identifiable, Hashable {
     /// The input schema for the tool, defining expected parameters.
     public let inputSchema: ToolInputSchema
 
+    /// Optional additional tool information.
+    public let annotations: ToolAnnotations?
+
     public var id: String { name }
 
     public init(
         name: String,
         description: String? = nil,
-        inputSchema: Schema
+        inputSchema: Schema,
+        annotations: ToolAnnotations? = nil
     ) {
         self.name = name
         self.description = description
         self.inputSchema = inputSchema
+        self.annotations = annotations
     }
 
     // MARK: - Equatable
 
     public static func == (lhs: MCPTool, rhs: MCPTool) -> Bool {
-        lhs.name == rhs.name && lhs.description == rhs.description
+        lhs.name == rhs.name &&
+        lhs.description == rhs.description &&
+        lhs.annotations == rhs.annotations
     }
 
     // MARK: - Hashable
@@ -62,5 +73,6 @@ public struct MCPTool: Codable, Sendable, Identifiable, Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(name)
         hasher.combine(description)
+        hasher.combine(annotations)
     }
 }
