@@ -25,6 +25,7 @@ public actor StreamableHTTPTransport: RetryableTransport {
     private var sessionID: String?
     private var lastEventID: String?
     private let parser = SSEParser()
+    private var retryInterval: TimeInterval?
 
     // MARK: - Initialization
 
@@ -122,29 +123,46 @@ public actor StreamableHTTPTransport: RetryableTransport {
 
         sessionID = nil
         lastEventID = nil
+        retryInterval = nil
         await parser.reset()
     }
 
-    private func handleSSEEvent(_ event: SSEEvent) async throws {
+    private func handleSSEEvent(_ event: SSEEvent) throws {
+        // Update last event ID if present
+        if let id = event.id {
+            lastEventID = id
+        }
+
+        // Update retry interval if present
+        if let retry = event.retry {
+            retryInterval = TimeInterval(retry) / 1000.0  // Convert ms to seconds
+        }
+
         guard !event.data.isEmpty else { return }
 
-        // Try to decode as single message first
-        if let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: event.data) {
-            logger.debug(
-                "Decoded single message: \(String(data: event.data, encoding: .utf8) ?? "invalid")")
-            messageContinuation?.yield(message)
-        }
-        // Try to decode as array of messages
-        else if let messages = try? JSONDecoder().decode([JSONRPCMessage].self, from: event.data) {
-            logger.debug(
-                "Decoded message array: \(String(data: event.data, encoding: .utf8) ?? "invalid")")
-            for message in messages {
+        do {
+            // Try to decode as single message first
+            if let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: event.data) {
+                logger.debug(
+                    "Decoded single message: \(String(data: event.data, encoding: .utf8) ?? "invalid")"
+                )
                 messageContinuation?.yield(message)
             }
-        } else {
-            logger.error(
-                "Failed to decode message(s) from data: \(String(data: event.data, encoding: .utf8) ?? "invalid")"
-            )
+            // Try to decode as array of messages
+            else if let messages = try? JSONDecoder().decode(
+                [JSONRPCMessage].self, from: event.data)
+            {
+                logger.debug(
+                    "Decoded message array: \(String(data: event.data, encoding: .utf8) ?? "invalid")"
+                )
+                for message in messages {
+                    messageContinuation?.yield(message)
+                }
+            } else {
+                logger.error(
+                    "Failed to decode message(s) from data: \(String(data: event.data, encoding: .utf8) ?? "invalid")"
+                )
+            }
         }
     }
 
@@ -162,7 +180,7 @@ public actor StreamableHTTPTransport: RetryableTransport {
             request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id")
         }
 
-        // Add last event ID if available
+        // Add last event ID if available for resumability
         if let lastEventID = lastEventID {
             request.setValue(lastEventID, forHTTPHeaderField: "Last-Event-ID")
         }
@@ -188,6 +206,10 @@ public actor StreamableHTTPTransport: RetryableTransport {
             else {
                 throw TransportError.operationFailed("Expected text/event-stream content type")
             }
+        case 404:
+            // Session expired
+            sessionID = nil
+            throw TransportError.sessionExpired
         case 405:
             throw TransportError.operationFailed("Server does not support SSE")
         default:
@@ -200,13 +222,13 @@ public actor StreamableHTTPTransport: RetryableTransport {
         // Process SSE stream
         for try await line in bytes.lines {
             if let event = try await parser.parseLine(line) {
-                try await handleSSEEvent(event)
+                try handleSSEEvent(event)
             }
         }
 
         // Process any remaining data
         if let event = await parser.flush() {
-            try await handleSSEEvent(event)
+            try handleSSEEvent(event)
         }
     }
 
@@ -268,7 +290,7 @@ public actor StreamableHTTPTransport: RetryableTransport {
                         String(data: data, encoding: .utf8)?.components(separatedBy: "\n") ?? []
                     for line in lines {
                         if let event = try await parser.parseLine(line) {
-                            try await handleSSEEvent(event)
+                            try handleSSEEvent(event)
                         }
                     }
                 }
