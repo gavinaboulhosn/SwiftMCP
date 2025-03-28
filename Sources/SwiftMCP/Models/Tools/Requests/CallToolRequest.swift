@@ -28,23 +28,23 @@ import Foundation
 /// }
 /// ```
 public struct CallToolRequest: MCPRequest {
-    public static let method = "tools/call"
-    public typealias Response = CallToolResult
+  public static let method = "tools/call"
+  public typealias Response = CallToolResult
 
-    public struct Params: MCPRequestParams {
-        public var _meta: RequestMeta?
-        public let name: String
-        public let arguments: [String: AnyCodable]
+  public struct Params: MCPRequestParams {
+    public var _meta: RequestMeta?
+    public let name: String
+    public let arguments: [String: AnyCodable]
 
-        public init(name: String, arguments: [String: AnyCodable]?) {
-            self.name = name
-            self.arguments = arguments ?? [:]
-        }
+    public init(name: String, arguments: [String: AnyCodable]?) {
+      self.name = name
+      self.arguments = arguments ?? [:]
     }
+  }
 
-    public var params: Params
+  public var params: Params
 
-    public init(name: String, arguments: [String: Any]? = nil) {
-        params = Params(name: name, arguments: arguments?.mapValues(AnyCodable.init))
-    }
+  public init(name: String, arguments: [String: Any]? = nil) {
+    params = Params(name: name, arguments: arguments?.mapValues(AnyCodable.init))
+  }
 }

@@ -199,17 +199,6 @@ struct FeatureTests {
     await connection.refreshTools()
 
     // Using actor to safely track progress updates
-    actor ProgressTracker {
-      var updates: [(Double, Double?)] = []
-
-      func addUpdate(progress: Double, total: Double?) {
-        updates.append((progress, total))
-      }
-
-      func getUpdates() -> [(Double, Double?)] {
-        return updates
-      }
-    }
 
     let tracker = ProgressTracker()
 
@@ -230,4 +219,27 @@ struct FeatureTests {
     #expect(!progressUpdates.isEmpty)
     #expect(progressUpdates.count >= 4)
   }
+
+  actor ProgressTracker {
+    var called = false
+
+    var updates: [(Double, Double?)] = []
+
+    func addUpdate(progress: Double, total: Double?) {
+      updates.append((progress, total))
+    }
+
+    func getUpdates() -> [(Double, Double?)] {
+      return updates
+    }
+
+    func markCalled() {
+      called = true
+    }
+
+    func wasCalled() -> Bool {
+      return called
+    }
+  }
+
 }

@@ -15,8 +15,8 @@ public actor MCPClient: MCPEndpointProtocol {
   /// Creates a client with a given configuration.
   public init(
     clientInfo: Implementation,
-    capabilities: ClientCapabilities = .init()
-  ) {
+    capabilities: ClientCapabilities = .init())
+  {
     let (notifications, notificationsContinuation) = AsyncStream.makeStream(
       of: (any MCPNotification).self)
     self.notifications = notifications
@@ -64,8 +64,8 @@ public actor MCPClient: MCPEndpointProtocol {
   /// so that the client can respond to inbound requests from a server.
   public func registerHandler<R: MCPRequest>(
     for _: R.Type,
-    handler: @escaping (R) async throws -> R.Response
-  ) {
+    handler: @escaping (R) async throws -> R.Response)
+  {
     let handler: ServerRequestHandler = { anyReq in
       guard let typed = anyReq as? R else {
         throw MCPError.invalidRequest("Unexpected request type")
@@ -221,8 +221,7 @@ public actor MCPClient: MCPEndpointProtocol {
   /// Send an MCP request with an optional progress handler.
   public func send<R: MCPRequest>(
     _ request: R,
-    progressHandler: ProgressHandler.UpdateHandler? = nil
-  )
+    progressHandler: ProgressHandler.UpdateHandler? = nil)
     async throws -> R.Response
   {
     guard isConnected else {
@@ -234,8 +233,7 @@ public actor MCPClient: MCPEndpointProtocol {
     }
     let response = try await sendRequest(request, progressHandler: progressHandler)
     logger.debug(
-      "MCPClient sent request \(R.method) -> received response type \(String(describing: R.Response.self))"
-    )
+      "MCPClient sent request \(R.method) -> received response type \(String(describing: R.Response.self))")
     return response
   }
 
@@ -334,8 +332,9 @@ public actor MCPClient: MCPEndpointProtocol {
 
   private func sendRequest<R: MCPRequest>(
     _ request: R,
-    progressHandler: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> R.Response {
+    progressHandler: ProgressHandler.UpdateHandler? = nil)
+    async throws -> R.Response
+  {
     guard let transport else {
       throw MCPError.connectionClosed()
     }
@@ -492,8 +491,7 @@ public actor MCPClient: MCPEndpointProtocol {
       // Verify negotiated version
       guard negotiateResp.protocolVersion == negotiatedVersion else {
         throw MCPError.invalidRequest(
-          "Server changed version during negotiation from \(negotiatedVersion) to \(negotiateResp.protocolVersion)"
-        )
+          "Server changed version during negotiation from \(negotiatedVersion) to \(negotiateResp.protocolVersion)")
       }
 
       let notification = InitializedNotification()
@@ -512,8 +510,9 @@ public actor MCPClient: MCPEndpointProtocol {
   /// Validate that the server capabilities for the current session support the given request.
   private func validateCapabilities(
     _ capabilities: ServerCapabilities,
-    for request: any MCPRequest
-  ) throws {
+    for request: any MCPRequest)
+    throws
+  {
     switch request {
     case is ListPromptsRequest:
       guard capabilities.prompts != nil else {
@@ -573,32 +572,36 @@ public actor MCPClient: MCPEndpointProtocol {
 extension MCPClient {
   public func listPrompts(
     cursor: String? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> ListPromptsResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> ListPromptsResult
+  {
     try await send(ListPromptsRequest(cursor: cursor), progressHandler: progress)
   }
 
   public func getPrompt(
     _ name: String,
     arguments: [String: String]? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> GetPromptResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> GetPromptResult
+  {
     try await send(
       GetPromptRequest(name: name, arguments: arguments ?? [:]), progressHandler: progress)
   }
 
   public func listTools(
     cursor: String? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> ListToolsResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> ListToolsResult
+  {
     try await send(ListToolsRequest(cursor: cursor), progressHandler: progress)
   }
 
   public func callTool(
     _ toolName: String,
     with arguments: [String: Any]? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> CallToolResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> CallToolResult
+  {
     try await send(
       CallToolRequest(
         name: toolName,
@@ -608,43 +611,49 @@ extension MCPClient {
 
   public func setLoggingLevel(
     _ level: LoggingLevel,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws
+  {
     _ = try await send(SetLevelRequest(level: level), progressHandler: progress)
   }
 
   public func listResources(
     _ cursor: String? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> ListResourcesResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> ListResourcesResult
+  {
     try await send(ListResourcesRequest(cursor: cursor), progressHandler: progress)
   }
 
   public func subscribe(
     to uri: String,
-    progress _: ProgressHandler.UpdateHandler? = nil
-  ) async throws {
+    progress _: ProgressHandler.UpdateHandler? = nil)
+    async throws
+  {
     _ = try await send(SubscribeRequest(uri: uri))
   }
 
   public func unsubscribe(
     from uri: String,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws
+  {
     _ = try await send(UnsubscribeRequest(uri: uri), progressHandler: progress)
   }
 
   public func listResourceTemplates(
     _ cursor: String? = nil,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> ListResourceTemplatesResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> ListResourceTemplatesResult
+  {
     try await send(ListResourceTemplatesRequest(cursor: cursor), progressHandler: progress)
   }
 
   public func readResource(
     _ uri: String,
-    progress: ProgressHandler.UpdateHandler? = nil
-  ) async throws -> ReadResourceResult {
+    progress: ProgressHandler.UpdateHandler? = nil)
+    async throws -> ReadResourceResult
+  {
     try await send(ReadResourceRequest(uri: uri), progressHandler: progress)
   }
 

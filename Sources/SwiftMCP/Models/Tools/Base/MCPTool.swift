@@ -31,48 +31,53 @@ import Foundation
 /// }
 /// ```
 public struct MCPTool: Codable, Sendable, Identifiable, Hashable {
-    public typealias ToolInputSchema = Schema
 
-    /// The name of the tool.
-    public let name: String
+  // MARK: Lifecycle
 
-    /// A human-readable description of what this tool does.
-    /// This can be used by clients to improve the LLM's understanding of available tools.
-    public let description: String?
+  public init(
+    name: String,
+    description: String? = nil,
+    inputSchema: Schema,
+    annotations: ToolAnnotations? = nil)
+  {
+    self.name = name
+    self.description = description
+    self.inputSchema = inputSchema
+    self.annotations = annotations
+  }
 
-    /// The input schema for the tool, defining expected parameters.
-    public let inputSchema: ToolInputSchema
+  // MARK: Public
 
-    /// Optional additional tool information.
-    public let annotations: ToolAnnotations?
+  public typealias ToolInputSchema = Schema
 
-    public var id: String { name }
+  /// The name of the tool.
+  public let name: String
 
-    public init(
-        name: String,
-        description: String? = nil,
-        inputSchema: Schema,
-        annotations: ToolAnnotations? = nil
-    ) {
-        self.name = name
-        self.description = description
-        self.inputSchema = inputSchema
-        self.annotations = annotations
-    }
+  /// A human-readable description of what this tool does.
+  /// This can be used by clients to improve the LLM's understanding of available tools.
+  public let description: String?
 
-    // MARK: - Equatable
+  /// The input schema for the tool, defining expected parameters.
+  public let inputSchema: ToolInputSchema
 
-    public static func == (lhs: MCPTool, rhs: MCPTool) -> Bool {
-        lhs.name == rhs.name &&
-        lhs.description == rhs.description &&
-        lhs.annotations == rhs.annotations
-    }
+  /// Optional additional tool information.
+  public let annotations: ToolAnnotations?
 
-    // MARK: - Hashable
+  public var id: String { name }
 
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(description)
-        hasher.combine(annotations)
-    }
+  // MARK: - Equatable
+
+  public static func ==(lhs: MCPTool, rhs: MCPTool) -> Bool {
+    lhs.name == rhs.name &&
+      lhs.description == rhs.description &&
+      lhs.annotations == rhs.annotations
+  }
+
+  // MARK: - Hashable
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(name)
+    hasher.combine(description)
+    hasher.combine(annotations)
+  }
 }

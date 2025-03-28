@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - PromptMessage
+
 /// Describes a message returned as part of a prompt.
 ///
 /// This is similar to `SamplingMessage`, but also supports the embedding of
@@ -35,12 +37,14 @@ public struct PromptMessage: Codable, Sendable, Hashable {
 
   public init(
     role: Role,
-    content: PromptContent
-  ) {
+    content: PromptContent)
+  {
     self.role = role
     self.content = content
   }
 }
+
+// MARK: - PromptContent
 
 /// The content of a prompt message.
 public enum PromptContent: Codable, Sendable, Hashable {
@@ -48,23 +52,28 @@ public enum PromptContent: Codable, Sendable, Hashable {
   case image(ImageContent)
   case resource(EmbeddedResourceContent)
 
+  // MARK: Lifecycle
+
   // MARK: - Codable
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.singleValueContainer()
-    if let textContent = try? container.decode(TextContent.self),
+    if
+      let textContent = try? container.decode(TextContent.self),
       textContent.type == .text
     {
       self = .text(textContent)
       return
     }
-    if let imageContent = try? container.decode(ImageContent.self),
+    if
+      let imageContent = try? container.decode(ImageContent.self),
       imageContent.type == .image
     {
       self = .image(imageContent)
       return
     }
-    if let resourceContent = try? container.decode(EmbeddedResourceContent.self),
+    if
+      let resourceContent = try? container.decode(EmbeddedResourceContent.self),
       resourceContent.type == .resource
     {
       self = .resource(resourceContent)
@@ -73,6 +82,8 @@ public enum PromptContent: Codable, Sendable, Hashable {
     throw DecodingError.dataCorruptedError(
       in: container, debugDescription: "Invalid PromptContent")
   }
+
+  // MARK: Public
 
   public func encode(to encoder: Encoder) throws {
     var container = encoder.singleValueContainer()

@@ -37,8 +37,8 @@ public struct PromptArgument: Codable, Sendable, Hashable {
   public init(
     name: String,
     description: String? = nil,
-    required: Bool? = nil
-  ) {
+    required: Bool? = nil)
+  {
     self.name = name
     self.description = description
     self.required = required

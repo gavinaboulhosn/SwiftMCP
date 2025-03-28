@@ -28,6 +28,21 @@ import Foundation
 /// }
 /// ```
 public struct ListPromptsResult: MCPResponse {
+
+  // MARK: Lifecycle
+
+  public init(
+    prompts: [MCPPrompt],
+    nextCursor: String? = nil,
+    metadata: [String: AnyCodable]? = nil)
+  {
+    self.prompts = prompts
+    self.nextCursor = nextCursor
+    _meta = metadata
+  }
+
+  // MARK: Public
+
   public typealias Request = ListPromptsRequest
 
   public var _meta: [String: AnyCodable]?
@@ -39,13 +54,4 @@ public struct ListPromptsResult: MCPResponse {
   /// If present, there may be more results available.
   public let nextCursor: String?
 
-  public init(
-    prompts: [MCPPrompt],
-    nextCursor: String? = nil,
-    metadata: [String: AnyCodable]? = nil
-  ) {
-    self.prompts = prompts
-    self.nextCursor = nextCursor
-    _meta = metadata
-  }
 }

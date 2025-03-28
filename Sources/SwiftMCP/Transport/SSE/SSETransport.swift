@@ -474,7 +474,7 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
     logger.debug("Final endpoint URL: '\(endpointURL.absoluteString)'")
 
     // Update the POST endpoint
-    if self.postURL != nil {
+    if postURL != nil {
       logger.debug(
         "Replacing existing endpoint URL \(self.postURL!.absoluteString) with new URL \(endpointURL.absoluteString)")
     }
@@ -498,9 +498,9 @@ public actor SSEClientTransport: MCPTransport, RetryableTransport {
   }
 
   private func attemptReconnection() async throws -> Bool {
-    if self.reconnectAttempt < self.maxReconnectAttempts {
-      self.reconnectAttempt += 1
-      let delay = TimeInterval(pow(2.0, Double(self.reconnectAttempt - 1))) // Exponential backoff
+    if reconnectAttempt < maxReconnectAttempts {
+      reconnectAttempt += 1
+      let delay = TimeInterval(pow(2.0, Double(reconnectAttempt - 1))) // Exponential backoff
       logger.info(
         "Reconnection attempt \(self.reconnectAttempt)/\(self.maxReconnectAttempts) in \(delay) seconds")
       state = .connecting

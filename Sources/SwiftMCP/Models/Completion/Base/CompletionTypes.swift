@@ -1,9 +1,13 @@
 import Foundation
 
+// MARK: - CompletionReference
+
 /// Reference types for completion requests
 public enum CompletionReference: Codable, Sendable {
   case prompt(PromptRef)
   case resource(ResourceRef)
+
+  // MARK: Lifecycle
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.singleValueContainer()
@@ -25,6 +29,8 @@ public enum CompletionReference: Codable, Sendable {
       in: container, debugDescription: "Unknown reference type")
   }
 
+  // MARK: Public
+
   public func encode(to encoder: Encoder) throws {
     switch self {
     case .prompt(let promptRef): try promptRef.encode(to: encoder)
@@ -32,6 +38,8 @@ public enum CompletionReference: Codable, Sendable {
     }
   }
 }
+
+// MARK: - PromptRef
 
 /// Reference to a prompt for completion
 public struct PromptRef: Codable, Sendable {
@@ -43,6 +51,8 @@ public struct PromptRef: Codable, Sendable {
   }
 }
 
+// MARK: - ResourceRef
+
 /// Reference to a resource for completion
 public struct ResourceRef: Codable, Sendable {
   public let uri: String
@@ -52,6 +62,8 @@ public struct ResourceRef: Codable, Sendable {
     self.uri = uri
   }
 }
+
+// MARK: - CompletionArgument
 
 /// Argument for completion requests
 public struct CompletionArgument: Codable, Sendable {
@@ -63,6 +75,8 @@ public struct CompletionArgument: Codable, Sendable {
     self.value = value
   }
 }
+
+// MARK: - CompletionResult
 
 /// Result of a completion request
 public struct CompletionResult: Codable, Sendable {

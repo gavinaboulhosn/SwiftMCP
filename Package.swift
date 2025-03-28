@@ -10,7 +10,7 @@ let package = Package(
   products: [
     .library(
       name: "SwiftMCP",
-      targets: ["SwiftMCP"])
+      targets: ["SwiftMCP"]),
   ],
   dependencies: [
     .package(url: "https://github.com/ajevans99/swift-json-schema.git", from: "0.3.2"),
@@ -20,7 +20,7 @@ let package = Package(
     .target(
       name: "SwiftMCP",
       dependencies: [
-        .product(name: "JSONSchema", package: "swift-json-schema")
+        .product(name: "JSONSchema", package: "swift-json-schema"),
       ]),
     .testTarget(
       name: "SwiftMCPTests",

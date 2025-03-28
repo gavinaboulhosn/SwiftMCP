@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - ResourceListChangedNotification
+
 public struct ResourceListChangedNotification: MCPNotification {
   public static let method = "notifications/resources/list_changed"
   public var method: String { ResourceListChangedNotification.method }
@@ -14,6 +16,8 @@ public struct ResourceListChangedNotification: MCPNotification {
     params = Params(_meta: _meta)
   }
 }
+
+// MARK: - ResourceUpdatedNotification
 
 public struct ResourceUpdatedNotification: MCPNotification {
   public static let method = "notifications/resources/updated"

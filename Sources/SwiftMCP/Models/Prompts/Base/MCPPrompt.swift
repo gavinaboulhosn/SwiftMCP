@@ -26,7 +26,20 @@ import Foundation
 /// }
 /// ```
 public struct MCPPrompt: Codable, Sendable, Hashable, Identifiable {
-  public var id: String { name }
+
+  // MARK: Lifecycle
+
+  public init(
+    name: String,
+    description: String? = nil,
+    arguments: [PromptArgument]? = nil)
+  {
+    self.name = name
+    self.description = description
+    self.arguments = arguments
+  }
+
+  // MARK: Public
 
   /// The name of the prompt or prompt template.
   public let name: String
@@ -37,13 +50,6 @@ public struct MCPPrompt: Codable, Sendable, Hashable, Identifiable {
   /// A list of arguments to use for templating the prompt.
   public let arguments: [PromptArgument]?
 
-  public init(
-    name: String,
-    description: String? = nil,
-    arguments: [PromptArgument]? = nil
-  ) {
-    self.name = name
-    self.description = description
-    self.arguments = arguments
-  }
+  public var id: String { name }
+
 }

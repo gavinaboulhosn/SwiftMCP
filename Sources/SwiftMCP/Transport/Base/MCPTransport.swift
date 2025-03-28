@@ -22,7 +22,7 @@ public protocol MCPTransport: Actor {
   func start() async throws
 
   /// Stop the transport, closing any connections and cleaning up resources.
-  func stop()
+  func stop() async
 
   /// Send data across the transport, optionally with a custom timeout.
   func send(_ data: JSONRPCMessage, timeout: TimeInterval?) async throws
@@ -40,7 +40,8 @@ extension MCPTransport {
     do {
       bytes = try JSONEncoder().encode(message)
     } catch {
-      throw TransportError.operationFailed("Failed to serialize message: \(error.localizedDescription)")
+      throw TransportError.operationFailed(
+        "Failed to serialize message: \(error.localizedDescription)")
     }
     let messageSize = bytes.count
     let maxMessageSize = configuration.maxMessageSize

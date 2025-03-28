@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - ClientCapabilities
+
 public struct ClientCapabilities: Codable, Sendable {
 
   // MARK: Lifecycle

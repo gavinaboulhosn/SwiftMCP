@@ -20,7 +20,8 @@ public struct WebSocketTransportConfiguration: Codable {
   public init(
     endpointURL: URL,
     protocols: [String] = ["mcp"],
-    baseConfiguration: TransportConfiguration = .default)
+    baseConfiguration: TransportConfiguration = .default
+  )
     throws
   {
     guard
@@ -68,23 +69,22 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
     session.configuration.waitsForConnectivity = configuration.baseConfiguration.connectTimeout > 0
 
     // Create a weak reference to self to avoid retain cycles
-    weak var weakSelf = self
-    
-    delegate.onOpen = { 
-      if let transport = weakSelf {
-        Task { await transport.handleOpen() }
+
+    delegate.onOpen = { [weak self] in
+      Task {
+        await self?.handleOpen()
       }
     }
-    
-    delegate.onClose = { reason in
-      if let transport = weakSelf {
-        Task { await transport.onClose(reason) }
+
+    delegate.onClose = { [weak self] reason in
+      Task {
+        await self?.onClose(reason)
       }
     }
-    
-    delegate.onError = { error in
-      if let transport = weakSelf {
-        Task { await transport.handleError(error) }
+
+    delegate.onError = { [weak self] error in
+      Task {
+        await self?.handleError(error)
       }
     }
   }
@@ -233,7 +233,8 @@ public actor WebSocketClientTransport: MCPTransport, RetryableTransport {
         logger.debug("WebSocket message receiver cancelled for URL: \(endpointURL)")
       } catch {
         logger.error(
-          "Fatal error in WebSocket read loop for URL \(endpointURL): \(error.localizedDescription)")
+          "Fatal error in WebSocket read loop for URL \(endpointURL): \(error.localizedDescription)"
+        )
         state = .disconnected
         cleanup(error)
       }
@@ -266,8 +267,8 @@ private class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate {
   func urlSession(
     _: URLSession,
     webSocketTask _: URLSessionWebSocketTask,
-    didOpenWithProtocol _: String?)
-  {
+    didOpenWithProtocol _: String?
+  ) {
     onOpen?()
   }
 
@@ -275,8 +276,8 @@ private class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate {
     _: URLSession,
     webSocketTask _: URLSessionWebSocketTask,
     didCloseWith _: URLSessionWebSocketTask.CloseCode,
-    reason: Data?)
-  {
+    reason: Data?
+  ) {
     let message = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
     onClose?(message)
   }
@@ -284,8 +285,8 @@ private class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate {
   func urlSession(
     _: URLSession,
     task _: URLSessionTask,
-    didCompleteWithError error: Error?)
-  {
+    didCompleteWithError error: Error?
+  ) {
     if let error = error {
       onError?(error)
     }

@@ -118,7 +118,7 @@ struct MCPVersionTests {
         await mockNegotiate.setResponseHandler { message in
             switch message {
             case let .request(id, request):
-                guard let initRequest = request as? InitializeRequest else {
+                guard request is InitializeRequest else {
                     Issue.record("Expected InitializeRequest")
                     return nil
                 }

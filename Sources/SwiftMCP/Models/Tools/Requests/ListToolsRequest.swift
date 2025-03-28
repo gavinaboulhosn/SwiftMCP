@@ -24,17 +24,17 @@ import Foundation
 /// }
 /// ```
 public struct ListToolsRequest: MCPRequest {
-    public static let method = "tools/list"
-    public typealias Response = ListToolsResult
+  public static let method = "tools/list"
+  public typealias Response = ListToolsResult
 
-    public struct Params: MCPRequestParams {
-        public var _meta: RequestMeta?
-        public let cursor: String?
-    }
+  public struct Params: MCPRequestParams {
+    public var _meta: RequestMeta?
+    public let cursor: String?
+  }
 
-    public var params: Params
+  public var params: Params
 
-    public init(cursor: String? = nil) {
-        params = Params(cursor: cursor)
-    }
+  public init(cursor: String? = nil) {
+    params = Params(cursor: cursor)
+  }
 }

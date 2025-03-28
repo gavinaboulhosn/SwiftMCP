@@ -41,8 +41,8 @@ public struct GetPromptResult: MCPResponse, Sendable {
   public init(
     description: String? = nil,
     messages: [PromptMessage],
-    metadata: [String: AnyCodable]? = nil
-  ) {
+    metadata: [String: AnyCodable]? = nil)
+  {
     self.description = description
     self.messages = messages
     _meta = metadata

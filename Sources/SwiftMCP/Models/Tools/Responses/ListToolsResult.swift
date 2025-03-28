@@ -26,15 +26,15 @@ import Foundation
 /// }
 /// ```
 public struct ListToolsResult: MCPResponse {
-    public typealias Request = ListToolsRequest
+  public typealias Request = ListToolsRequest
 
-    /// Additional metadata about the response.
-    public var _meta: [String: AnyCodable]?
+  /// Additional metadata about the response.
+  public var _meta: [String: AnyCodable]?
 
-    /// The list of tools available on the server.
-    public let tools: [MCPTool]
+  /// The list of tools available on the server.
+  public let tools: [MCPTool]
 
-    /// An opaque token representing the pagination position after the last returned result.
-    /// If present, there may be more results available.
-    public let nextCursor: String?
+  /// An opaque token representing the pagination position after the last returned result.
+  /// If present, there may be more results available.
+  public let nextCursor: String?
 }

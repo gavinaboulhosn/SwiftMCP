@@ -30,15 +30,15 @@ import Foundation
 /// }
 /// ```
 public struct CallToolResult: MCPResponse {
-    public typealias Request = CallToolRequest
+  public typealias Request = CallToolRequest
 
-    /// The content returned by the tool.
-    public let content: [ToolContent]
+  /// The content returned by the tool.
+  public let content: [ToolContent]
 
-    /// Whether the tool call ended in an error.
-    /// If not set, this is assumed to be false (the call was successful).
-    public let isError: Bool?
+  /// Whether the tool call ended in an error.
+  /// If not set, this is assumed to be false (the call was successful).
+  public let isError: Bool?
 
-    /// Additional metadata about the response.
-    public var _meta: [String: AnyCodable]?
+  /// Additional metadata about the response.
+  public var _meta: [String: AnyCodable]?
 }

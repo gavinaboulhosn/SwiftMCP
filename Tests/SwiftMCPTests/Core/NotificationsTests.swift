@@ -29,9 +29,9 @@ struct NotificationsTests {
         }
 
         if let cancelledNotification = notif as? CancelledNotification {
-            let params = cancelledNotification.params as? CancelledNotification.Params
-            #expect(params?.requestId == .int(42))
-            #expect(params?.reason == "User aborted the operation")
+            let params = cancelledNotification.params
+            #expect(params.requestId == .int(42))
+            #expect(params.reason == "User aborted the operation")
         } else {
             Issue.record("Notification is not a CancelledNotification")
         }
@@ -63,8 +63,8 @@ struct NotificationsTests {
 
         if let promptListChangedNotification = notif as? PromptListChangedNotification {
             let params =
-                promptListChangedNotification.params as? PromptListChangedNotification.Params
-            if let meta = params?._meta {
+                promptListChangedNotification.params
+            if let meta = params._meta {
                 #expect((meta["reason"]?.value as? String) == "new prompts added")
             } else {
                 Issue.record("Missing _meta in prompt list changed notification params")
@@ -74,4 +74,3 @@ struct NotificationsTests {
         }
     }
 }
-

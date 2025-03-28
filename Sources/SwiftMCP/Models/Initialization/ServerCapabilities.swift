@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - ServerCapabilities
+
 public struct ServerCapabilities: Codable, Sendable {
 
   // MARK: Lifecycle
@@ -53,6 +55,8 @@ public struct ServerCapabilities: Codable, Sendable {
   public var tools: ToolsCapability?
 }
 
+// MARK: CustomStringConvertible
+
 extension ServerCapabilities: CustomStringConvertible {
   public var description: String {
     var desc = "ServerCapabilities("
@@ -69,6 +73,8 @@ extension ServerCapabilities: CustomStringConvertible {
     return desc
   }
 }
+
+// MARK: Equatable
 
 extension ServerCapabilities: Equatable {
   public static func ==(lhs: ServerCapabilities, rhs: ServerCapabilities) -> Bool {
