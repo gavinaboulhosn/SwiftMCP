@@ -10,13 +10,26 @@ private var everythingStdio: MCPTransport {
   )
 }
 
-private var memoryTransport: MCPTransport {
-  StdioTransport(
-    command: "npx", arguments: ["-y", "@modelcontextprotocol/server-memory"])
-}
+actor ProgressTracker {
+  var called = false
 
-private var everythingSSE: MCPTransport {
-  SSEClientTransport(sseURL: .init(string: "http://localhost:8000/sse")!)
+  var updates: [(Double, Double?)] = []
+
+  func addUpdate(progress: Double, total: Double?) {
+    updates.append((progress, total))
+  }
+
+  func getUpdates() -> [(Double, Double?)] {
+    return updates
+  }
+
+  func markCalled() {
+    called = true
+  }
+
+  func wasCalled() -> Bool {
+    return called
+  }
 }
 
 @Suite("Host Feature Tests")
@@ -81,19 +94,6 @@ struct FeatureTests {
     let tools = connection.tools
 
     #expect(tools.count > 0)
-
-    // Using actor to safely capture progress updates
-    actor ProgressTracker {
-      var called = false
-
-      func markCalled() {
-        called = true
-      }
-
-      func wasCalled() -> Bool {
-        return called
-      }
-    }
 
     let tracker = ProgressTracker()
 
@@ -218,28 +218,6 @@ struct FeatureTests {
 
     #expect(!progressUpdates.isEmpty)
     #expect(progressUpdates.count >= 4)
-  }
-
-  actor ProgressTracker {
-    var called = false
-
-    var updates: [(Double, Double?)] = []
-
-    func addUpdate(progress: Double, total: Double?) {
-      updates.append((progress, total))
-    }
-
-    func getUpdates() -> [(Double, Double?)] {
-      return updates
-    }
-
-    func markCalled() {
-      called = true
-    }
-
-    func wasCalled() -> Bool {
-      return called
-    }
   }
 
 }
