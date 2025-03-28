@@ -7,7 +7,7 @@ extension TransportConfiguration {
 }
 
 /// Defines overall transport behavior and retry policies.
-public struct TransportConfiguration: Codable {
+public struct TransportConfiguration: Codable, Equatable {
 
   // MARK: Lifecycle
 
@@ -70,4 +70,17 @@ public struct TransportConfiguration: Codable {
   /// Maximum reconnection attempts when health checks fail
   public var maxReconnectAttempts: Int
 
+  // MARK: - Equatable
+
+  public static func == (lhs: TransportConfiguration, rhs: TransportConfiguration) -> Bool {
+    lhs.connectTimeout == rhs.connectTimeout &&
+    lhs.sendTimeout == rhs.sendTimeout &&
+    lhs.requestTimeout == rhs.requestTimeout &&
+    lhs.responseTimeout == rhs.responseTimeout &&
+    lhs.maxMessageSize == rhs.maxMessageSize &&
+    lhs.retryPolicy == rhs.retryPolicy &&
+    lhs.healthCheckEnabled == rhs.healthCheckEnabled &&
+    lhs.healthCheckInterval == rhs.healthCheckInterval &&
+    lhs.maxReconnectAttempts == rhs.maxReconnectAttempts
+  }
 }

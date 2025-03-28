@@ -100,7 +100,7 @@ struct FeatureTests {
     _ = try await connection.callTool(
       "longRunningOperation",
       arguments: [
-        "duration": 3,
+        "duration": 2,
         "step": 10,
       ],
       progress: { _, _ in
@@ -110,7 +110,7 @@ struct FeatureTests {
       }
     )
 
-    try await Task.sleep(for: .seconds(5))
+    try await Task.sleep(for: .seconds(3))
     #expect(await tracker.wasCalled())
   }
 

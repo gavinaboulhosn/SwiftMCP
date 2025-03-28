@@ -1,7 +1,7 @@
 import Foundation
 
 /// Policy for retrying short-lived operations (e.g. POST calls).
-public struct TransportRetryPolicy: Codable {
+public struct TransportRetryPolicy: Codable, Equatable {
 
   // MARK: Lifecycle
 
@@ -23,7 +23,7 @@ public struct TransportRetryPolicy: Codable {
   // MARK: Public
 
   /// Types of backoff expansions for subsequent retries.
-  public enum BackoffPolicy: Codable {
+  public enum BackoffPolicy: Codable, Equatable {
     case constant
     case exponential
     case linear
@@ -69,5 +69,15 @@ public struct TransportRetryPolicy: Codable {
   public func delay(forAttempt attempt: Int) -> TimeInterval {
     let raw = backoffPolicy.delay(attempt: attempt, baseDelay: baseDelay, jitter: jitter)
     return min(raw, maxDelay)
+  }
+
+  // MARK: - Equatable
+
+  public static func == (lhs: TransportRetryPolicy, rhs: TransportRetryPolicy) -> Bool {
+    lhs.maxAttempts == rhs.maxAttempts &&
+    lhs.baseDelay == rhs.baseDelay &&
+    lhs.maxDelay == rhs.maxDelay &&
+    lhs.jitter == rhs.jitter &&
+    lhs.backoffPolicy == rhs.backoffPolicy
   }
 }

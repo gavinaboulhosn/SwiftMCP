@@ -1,7 +1,7 @@
 import Foundation
 
 /// Common errors at the transport layer (outside the scope of `MCPError`).
-public enum TransportError: Error, LocalizedError {
+public enum TransportError: Error, LocalizedError, Equatable {
   /// Timed out waiting for an operation
   case timeout(operation: String)
   /// Invalid message format
@@ -18,6 +18,8 @@ public enum TransportError: Error, LocalizedError {
   case notSupported(String)
   /// Invalid URL scheme for transport
   case invalidURLScheme(String)
+  /// Session has expired and needs to be reestablished
+  case sessionExpired
 
   // MARK: Public
 
@@ -39,6 +41,8 @@ public enum TransportError: Error, LocalizedError {
       "Transport type not supported: \(detail)"
     case .invalidURLScheme(let scheme):
       "Invalid URL scheme for WebSocket transport: \(scheme). Must be 'ws' or 'wss'"
+    case .sessionExpired:
+      "Session has expired and needs to be reestablished"
     }
   }
 }
